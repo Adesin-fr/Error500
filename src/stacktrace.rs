@@ -51,7 +51,9 @@ fn str_list(v: &Value, key: &str) -> Vec<String> {
         .unwrap_or_default()
 }
 
-fn frame_view(frame: &Value, maps: &MapSet) -> FrameView {
+/// Renvoie le frame et le nom de fonction que la source map donne *à la position de ce frame*.
+/// Ce nom est celui de la fonction appelée à cet endroit, donc celui du frame suivant (voir `build_view`).
+fn frame_view(frame: &Value, maps: &MapSet) -> (FrameView, Option<String>) {
     let filename = opt_str(frame, "filename").or_else(|| opt_str(frame, "abs_path"));
     let in_app = frame
         .get("in_app")
@@ -74,7 +76,9 @@ fn frame_view(frame: &Value, maps: &MapSet) -> FrameView {
         .and_then(|path| maps.get(&path))
         .zip(view.lineno.zip(view.colno))
         .and_then(|(map, (line, col))| resolve_frame(map, line, col));
+    let mut call_site_name = None;
     if let Some(r) = resolved {
+        call_site_name = r.function;
         view.minified = Some(Location {
             filename: view.filename.take().unwrap_or_default(),
             lineno: view.lineno,
@@ -83,13 +87,12 @@ fn frame_view(frame: &Value, maps: &MapSet) -> FrameView {
         view.filename = Some(r.filename);
         view.lineno = Some(r.lineno);
         view.colno = Some(r.colno);
-        view.function = r.function.or(view.function);
         view.pre_context = r.pre_context;
         view.context_line = r.context_line;
         view.post_context = r.post_context;
         view.resolved = true;
     }
-    view
+    (view, call_site_name)
 }
 
 /// Exceptions (la plus récente d'abord) avec leurs frames (le plus récent d'abord).
@@ -100,12 +103,25 @@ pub fn build_view(payload: &Value, maps: &MapSet) -> Vec<ExceptionView> {
         .iter()
         .rev()
         .map(|ex| {
-            let frames = ex
-                .get("stacktrace")
-                .and_then(|s| s.get("frames"))
-                .and_then(Value::as_array)
-                .map(|frames| frames.iter().rev().map(|f| frame_view(f, maps)).collect())
+            let raw = ex.get("stacktrace").and_then(|s| s.get("frames")).and_then(Value::as_array);
+            // Du plus ancien au plus récent : le nom lu à la position d'un frame nomme le frame suivant.
+            let mut caller_name: Option<String> = None;
+            let mut frames: Vec<FrameView> = raw
+                .map(|frames| {
+                    frames
+                        .iter()
+                        .map(|f| {
+                            let (mut view, call_site_name) = frame_view(f, maps);
+                            if view.resolved && caller_name.is_some() {
+                                view.function = caller_name.take();
+                            }
+                            caller_name = call_site_name;
+                            view
+                        })
+                        .collect()
+                })
                 .unwrap_or_default();
+            frames.reverse();
             ExceptionView { ty: opt_str(ex, "type"), value: opt_str(ex, "value"), frames }
         })
         .collect()
@@ -165,10 +181,36 @@ mod tests {
         assert_eq!(f.filename.as_deref(), Some("src/app.ts"));
         assert_eq!(f.lineno, Some(3));
         assert_eq!(f.colno, Some(5));
-        assert_eq!(f.function.as_deref(), Some("handleClick"));
+        // sans appelant remappé, le nom reste celui du frame d'origine
+        assert_eq!(f.function.as_deref(), Some("t"));
         assert_eq!(f.context_line.as_deref(), Some("function handleClick() {"));
         let min = f.minified.as_ref().unwrap();
         assert_eq!((min.filename.as_str(), min.lineno, min.colno), ("app.min.js", Some(1), Some(10)));
+    }
+
+    fn chain(names: [&str; 3]) -> serde_json::Value {
+        let url = "https://app.example.com/static/app.min.js";
+        let frame = |f: &str| json!({"abs_path": url, "filename": url, "function": f, "lineno": 1, "colno": 10, "in_app": true});
+        // ordre Sentry : du plus ancien (appelant) au plus récent
+        json!({"exception": {"values": [{"type": "E", "stacktrace": {"frames": [frame(names[0]), frame(names[1]), frame(names[2])]}}]}})
+    }
+
+    #[test]
+    fn function_name_comes_from_the_call_site_in_the_caller_frame() {
+        // Le nom d'une map, à une position, est celui de la fonction appelée là : il nomme le frame suivant.
+        let frames = &build_view(&chain(["a", "b", "c"]), &maps())[0].frames; // plus récent d'abord
+        assert_eq!(frames[0].function.as_deref(), Some("handleClick"), "c nommé par l'appel dans b");
+        assert_eq!(frames[1].function.as_deref(), Some("handleClick"), "b nommé par l'appel dans a");
+        assert_eq!(frames[2].function.as_deref(), Some("a"), "a n'a pas d'appelant remappé");
+    }
+
+    #[test]
+    fn unresolved_callee_keeps_its_own_name() {
+        let mut p = chain(["a", "b", "c"]);
+        p["exception"]["values"][0]["stacktrace"]["frames"][2]["lineno"] = json!(99);
+        let frames = &build_view(&p, &maps())[0].frames;
+        assert_eq!(frames[0].function.as_deref(), Some("c"));
+        assert!(!frames[0].resolved);
     }
 
     #[test]
