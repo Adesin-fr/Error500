@@ -6,7 +6,7 @@ use crate::projects::Project;
 use crate::storage::BlobStore;
 use bytes::Bytes;
 use chrono::{DateTime, NaiveDateTime, TimeZone, Utc};
-use flate2::read::{GzDecoder, ZlibDecoder};
+use flate2::read::{DeflateDecoder, GzDecoder, ZlibDecoder};
 use serde_json::Value;
 use sqlx::MySqlPool;
 use std::io::Read;
@@ -196,14 +196,36 @@ async fn upsert_replay(pool: &MySqlPool, project: &Project, payload: &Value) -> 
     let start = payload.get("replay_start_timestamp").and_then(Value::as_f64).map(secs_to_dt).unwrap_or(ts);
     let urls = payload.get("urls").filter(|u| !u.is_null()).map(Value::to_string);
     let field = |k: &str| payload.get(k).and_then(Value::as_str).map(|s| trunc(s, 255));
+    let user = payload.get("user").and_then(|u| {
+        ["email", "username", "id", "ip_address"]
+            .iter()
+            .find_map(|k| u.get(k).and_then(Value::as_str).filter(|s| !s.is_empty()))
+            .map(|s| trunc(s, 255))
+    });
+    let context_label = |ctx: &str| {
+        let c = payload.get("contexts")?.get(ctx)?;
+        let name = c.get("name")?.as_str()?;
+        let label = match c.get("version").and_then(Value::as_str) {
+            Some(v) => format!("{name} {v}"),
+            None => name.to_string(),
+        };
+        Some(trunc(&label, 255))
+    };
+    let error_ids = payload
+        .get("error_ids")
+        .filter(|e| e.as_array().is_some_and(|a| !a.is_empty()))
+        .map(Value::to_string);
 
     sqlx::query(
-        "INSERT INTO replays (project_id, replay_id, first_seen, last_seen, urls, release_name, environment) \
-         VALUES (?, ?, ?, ?, ?, ?, ?) \
+        "INSERT INTO replays (project_id, replay_id, first_seen, last_seen, urls, release_name, environment, \
+         user_label, browser, os, replay_type, error_ids) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) \
          ON DUPLICATE KEY UPDATE first_seen = LEAST(first_seen, VALUES(first_seen)), \
            last_seen = GREATEST(last_seen, VALUES(last_seen)), urls = COALESCE(VALUES(urls), urls), \
            release_name = COALESCE(VALUES(release_name), release_name), \
-           environment = COALESCE(VALUES(environment), environment)",
+           environment = COALESCE(VALUES(environment), environment), \
+           user_label = COALESCE(VALUES(user_label), user_label), browser = COALESCE(VALUES(browser), browser), \
+           os = COALESCE(VALUES(os), os), replay_type = COALESCE(VALUES(replay_type), replay_type), \
+           error_ids = COALESCE(VALUES(error_ids), error_ids)",
     )
     .bind(project.id)
     .bind(replay_id)
@@ -212,20 +234,41 @@ async fn upsert_replay(pool: &MySqlPool, project: &Project, payload: &Value) -> 
     .bind(urls)
     .bind(field("release"))
     .bind(field("environment"))
+    .bind(user)
+    .bind(context_label("browser"))
+    .bind(context_label("os"))
+    .bind(field("replay_type"))
+    .bind(error_ids)
     .execute(pool)
     .await?;
     Ok(())
 }
 
-/// Décompresse un corps de segment (zlib ou gzip) ; renvoie le corps tel quel s'il est en clair.
+fn looks_like_json(b: &[u8]) -> bool {
+    matches!(b.iter().find(|c| !c.is_ascii_whitespace()), Some(b'[' | b'{'))
+}
+
+/// Décompresse un corps de segment. Selon la version du SDK : JSON en clair, zlib, gzip ou deflate brut.
+/// Un résultat n'est retenu que s'il ressemble à du JSON ; sinon le corps est conservé tel quel.
 fn decompress(body: &[u8]) -> Vec<u8> {
+    if looks_like_json(body) {
+        return body.to_vec();
+    }
+    let attempts: [fn(&[u8]) -> Option<Vec<u8>>; 3] = [
+        |b| read_all(ZlibDecoder::new(b)),
+        |b| read_all(GzDecoder::new(b)),
+        |b| read_all(DeflateDecoder::new(b)),
+    ];
+    attempts
+        .iter()
+        .filter_map(|f| f(body))
+        .find(|out| looks_like_json(out))
+        .unwrap_or_else(|| body.to_vec())
+}
+
+fn read_all(mut r: impl Read) -> Option<Vec<u8>> {
     let mut out = Vec::new();
-    let ok = match body {
-        [0x78, ..] => ZlibDecoder::new(body).read_to_end(&mut out).is_ok(),
-        [0x1f, 0x8b, ..] => GzDecoder::new(body).read_to_end(&mut out).is_ok(),
-        _ => false,
-    };
-    if ok { out } else { body.to_vec() }
+    r.read_to_end(&mut out).ok().map(|_| out)
 }
 
 async fn ingest_recording(

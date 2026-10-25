@@ -85,3 +85,31 @@ async fn rotating_key_invalidates_the_old_one() {
     assert!(projects::authorize_ingest(&db.pool, p.id, &new_key).await.unwrap().is_some());
     db.cleanup().await;
 }
+
+#[tokio::test]
+async fn upload_token_is_generated_and_checked() {
+    let db = TestDb::new().await;
+    let u = user(&db, "a@example.com").await;
+    let p = projects::create_project(&db.pool, u.id, "A").await.unwrap();
+    let other = projects::create_project(&db.pool, u.id, "B").await.unwrap();
+    let token = projects::upload_token(&db.pool, p.id).await.unwrap();
+    assert_eq!(token.len(), 32);
+    assert!(projects::authorize_upload(&db.pool, p.id, &token).await.unwrap());
+    assert!(!projects::authorize_upload(&db.pool, other.id, &token).await.unwrap());
+    assert!(!projects::authorize_upload(&db.pool, p.id, "").await.unwrap());
+    assert!(!projects::authorize_upload(&db.pool, p.id, "wrong").await.unwrap());
+    db.cleanup().await;
+}
+
+#[tokio::test]
+async fn rotating_upload_token_invalidates_the_old_one() {
+    let db = TestDb::new().await;
+    let u = user(&db, "a@example.com").await;
+    let p = projects::create_project(&db.pool, u.id, "A").await.unwrap();
+    let old = projects::upload_token(&db.pool, p.id).await.unwrap();
+    let new = projects::rotate_upload_token(&db.pool, p.id).await.unwrap();
+    assert_ne!(old, new);
+    assert!(!projects::authorize_upload(&db.pool, p.id, &old).await.unwrap());
+    assert!(projects::authorize_upload(&db.pool, p.id, &new).await.unwrap());
+    db.cleanup().await;
+}

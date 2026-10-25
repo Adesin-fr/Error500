@@ -62,10 +62,11 @@ pub async fn create_project(
         let slug = if attempt == 1 { base.clone() } else { format!("{base}-{attempt}") };
         let public_key = new_public_key();
         let mut tx = pool.begin().await?;
-        let res = sqlx::query("INSERT INTO projects (name, slug, public_key) VALUES (?, ?, ?)")
+        let res = sqlx::query("INSERT INTO projects (name, slug, public_key, upload_token) VALUES (?, ?, ?, ?)")
             .bind(name)
             .bind(&slug)
             .bind(&public_key)
+            .bind(new_public_key())
             .execute(&mut *tx)
             .await;
         match res {
@@ -155,4 +156,34 @@ pub async fn rotate_key(pool: &MySqlPool, project_id: u64) -> Result<String, sql
         .execute(pool)
         .await?;
     Ok(key)
+}
+
+/// Jeton (Bearer) qui autorise l'upload de source maps vers ce projet.
+pub async fn upload_token(pool: &MySqlPool, project_id: u64) -> Result<String, sqlx::Error> {
+    sqlx::query_scalar("SELECT upload_token FROM projects WHERE id = ?")
+        .bind(project_id)
+        .fetch_one(pool)
+        .await
+}
+
+pub async fn authorize_upload(pool: &MySqlPool, project_id: u64, token: &str) -> Result<bool, sqlx::Error> {
+    if token.is_empty() {
+        return Ok(false);
+    }
+    let found: Option<(u64,)> = sqlx::query_as("SELECT id FROM projects WHERE id = ? AND upload_token = ?")
+        .bind(project_id)
+        .bind(token)
+        .fetch_optional(pool)
+        .await?;
+    Ok(found.is_some())
+}
+
+pub async fn rotate_upload_token(pool: &MySqlPool, project_id: u64) -> Result<String, sqlx::Error> {
+    let token = new_public_key();
+    sqlx::query("UPDATE projects SET upload_token = ? WHERE id = ?")
+        .bind(&token)
+        .bind(project_id)
+        .execute(pool)
+        .await?;
+    Ok(token)
 }

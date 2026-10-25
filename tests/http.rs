@@ -240,3 +240,58 @@ async fn health_endpoint_is_ok() {
     assert_eq!(resp.status(), StatusCode::OK);
     a.db.cleanup().await;
 }
+
+// --- Upload de source maps ---
+
+const MAP: &str = r#"{"version":3,"sources":["src/app.ts"],"names":[],"mappings":"AAAA"}"#;
+
+fn upload(project_id: u64, query: &str, token: Option<&str>, body: &str) -> Request<Body> {
+    let mut b = Request::builder().method(Method::POST).uri(format!("/api/{project_id}/sourcemaps/{query}"));
+    if let Some(t) = token {
+        b = b.header(header::AUTHORIZATION, format!("Bearer {t}"));
+    }
+    b.body(Body::from(body.to_string())).unwrap()
+}
+
+async fn map_count(db: &TestDb) -> i64 {
+    sqlx::query_scalar("SELECT COUNT(*) FROM sourcemaps").fetch_one(&db.pool).await.unwrap()
+}
+
+#[tokio::test]
+async fn sourcemap_upload_with_project_token_is_stored() {
+    let a = app().await;
+    let token = projects::upload_token(&a.db.pool, a.project.id).await.unwrap();
+    let q = "?release=1.0&name=~%2Fstatic%2Fapp.min.js.map";
+    let (status, ..) = send(&a.router, upload(a.project.id, q, Some(&token), MAP)).await;
+    assert_eq!(status, StatusCode::OK);
+    let (name, release): (String, String) = sqlx::query_as("SELECT name, release_key FROM sourcemaps").fetch_one(&a.db.pool).await.unwrap();
+    assert_eq!((name.as_str(), release.as_str()), ("~/static/app.min.js.map", "1.0"));
+    a.db.cleanup().await;
+}
+
+#[tokio::test]
+async fn sourcemap_upload_requires_a_valid_token() {
+    let a = app().await;
+    let q = "?name=~%2Fa.js.map";
+    let (status, ..) = send(&a.router, upload(a.project.id, q, None, MAP)).await;
+    assert_eq!(status, StatusCode::UNAUTHORIZED);
+    let (status, ..) = send(&a.router, upload(a.project.id, q, Some("wrong"), MAP)).await;
+    assert_eq!(status, StatusCode::FORBIDDEN);
+    // la clé publique d'ingestion ne donne pas le droit d'uploader
+    let (status, ..) = send(&a.router, upload(a.project.id, q, Some(&a.project.public_key), MAP)).await;
+    assert_eq!(status, StatusCode::FORBIDDEN);
+    assert_eq!(map_count(&a.db).await, 0);
+    a.db.cleanup().await;
+}
+
+#[tokio::test]
+async fn sourcemap_upload_rejects_invalid_map_and_missing_name() {
+    let a = app().await;
+    let token = projects::upload_token(&a.db.pool, a.project.id).await.unwrap();
+    let (status, ..) = send(&a.router, upload(a.project.id, "?name=~%2Fa.js.map", Some(&token), "nope")).await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+    let (status, ..) = send(&a.router, upload(a.project.id, "", Some(&token), MAP)).await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+    assert_eq!(map_count(&a.db).await, 0);
+    a.db.cleanup().await;
+}

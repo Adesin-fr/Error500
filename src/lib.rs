@@ -7,3 +7,5 @@ pub mod storage;
 pub mod ingest;
 pub mod http;
 pub mod config;
+pub mod sourcemaps;
+pub mod stacktrace;

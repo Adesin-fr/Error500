@@ -227,3 +227,82 @@ async fn store_endpoint_payload_is_ingested_like_an_event() {
     assert_eq!(count(&db, "events").await, 1);
     db.cleanup().await;
 }
+
+// --- Compatibilité du format de replay du SDK Sentry (navigateur) ---
+
+fn raw_envelope(parts: &[&[u8]]) -> Envelope {
+    Envelope::parse(&parts.concat()).unwrap()
+}
+
+#[tokio::test]
+async fn raw_deflate_recording_is_decompressed() {
+    use flate2::write::DeflateEncoder;
+    let (db, store, p) = setup().await;
+    let rrweb = br#"[{"type":3,"data":{"source":1},"timestamp":1700000000000}]"#;
+    let mut enc = DeflateEncoder::new(Vec::new(), Compression::default());
+    enc.write_all(rrweb).unwrap();
+    let raw = enc.finish().unwrap();
+    let env = envelope(json!({"event_id": REPLAY_ID}), &[("replay_recording", &recording(0, &raw))]);
+    ingest::ingest_envelope(&db.pool, &store, &p, &env).await.unwrap();
+    let key = format!("replays/{}/{REPLAY_ID}/0", p.id);
+    assert_eq!(store.get(&key).await.unwrap(), Some(Bytes::from_static(rrweb)));
+    db.cleanup().await;
+}
+
+#[tokio::test]
+async fn sdk_shaped_envelope_without_item_length_on_replay_event() {
+    // Le SDK JS écrit `{"type":"replay_event"}` sans length : le payload s'arrête à la fin de ligne.
+    let (db, store, p) = setup().await;
+    let re = replay_event(REPLAY_ID, 0, 1700000010.0);
+    let rec = recording(0, b"[]");
+    let env = raw_envelope(&[
+        format!("{{\"event_id\":\"{REPLAY_ID}\",\"sent_at\":\"2023-11-14T22:13:20.000Z\",\"sdk\":{{\"name\":\"sentry.javascript.browser\"}}}}\n").as_bytes(),
+        b"{\"type\":\"replay_event\"}\n",
+        &re,
+        b"\n",
+        format!("{{\"type\":\"replay_recording\",\"length\":{}}}\n", rec.len()).as_bytes(),
+        &rec,
+        b"\n",
+    ]);
+    let s = ingest::ingest_envelope(&db.pool, &store, &p, &env).await.unwrap();
+    assert_eq!(s.replay_segments, 1);
+    assert_eq!(count(&db, "replays").await, 1);
+    db.cleanup().await;
+}
+
+#[tokio::test]
+async fn recording_listed_before_replay_event_still_resolves_replay_id() {
+    let (db, store, p) = setup().await;
+    // L'identifiant de l'enveloppe diffère du replay_id : seul le replay_event le donne.
+    let env = envelope(
+        json!({"event_id": "ffffffffffffffffffffffffffffffff"}),
+        &[("replay_recording", &recording(0, b"[]")), ("replay_event", &replay_event(REPLAY_ID, 0, 1700000010.0))],
+    );
+    ingest::ingest_envelope(&db.pool, &store, &p, &env).await.unwrap();
+    assert!(store.get(&format!("replays/{}/{REPLAY_ID}/0", p.id)).await.unwrap().is_some());
+    db.cleanup().await;
+}
+
+#[tokio::test]
+async fn replay_event_metadata_is_extracted() {
+    let (db, store, p) = setup().await;
+    let re = json!({
+        "type": "replay_event", "replay_id": REPLAY_ID, "segment_id": 0, "replay_type": "session",
+        "timestamp": 1700000010.0, "replay_start_timestamp": 1700000000.0,
+        "urls": ["https://app.example.com/"], "error_ids": ["e1", "e2"],
+        "user": {"email": "jane@example.com", "id": "42"},
+        "contexts": {"browser": {"name": "Chrome", "version": "120.0"}, "os": {"name": "macOS", "version": "14"}}
+    })
+    .to_string();
+    let env = envelope(json!({"event_id": REPLAY_ID}), &[("replay_event", re.as_bytes())]);
+    ingest::ingest_envelope(&db.pool, &store, &p, &env).await.unwrap();
+    let (user, browser, os, ty, errs): (String, String, String, String, String) =
+        sqlx::query_as("SELECT user_label, browser, os, replay_type, error_ids FROM replays")
+            .fetch_one(&db.pool).await.unwrap();
+    assert_eq!(user, "jane@example.com");
+    assert_eq!(browser, "Chrome 120.0");
+    assert_eq!(os, "macOS 14");
+    assert_eq!(ty, "session");
+    assert!(errs.contains("e1") && errs.contains("e2"));
+    db.cleanup().await;
+}

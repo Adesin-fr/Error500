@@ -4,6 +4,7 @@ use crate::auth::{key_from_auth_header, key_from_dsn, key_from_query};
 use crate::envelope::Envelope;
 use crate::ingest::{self, IngestError};
 use crate::projects::{self, Project};
+use crate::sourcemaps::{self, SourceMapError};
 use crate::storage::BlobStore;
 use axum::body::Bytes;
 use axum::extract::{DefaultBodyLimit, Path, RawQuery, State};
@@ -44,6 +45,8 @@ pub fn router(state: AppState) -> Router {
         .route("/api/{project_id}/envelope", post(envelope))
         .route("/api/{project_id}/store/", post(store))
         .route("/api/{project_id}/store", post(store))
+        .route("/api/{project_id}/sourcemaps/", post(upload_sourcemap).put(upload_sourcemap))
+        .route("/api/{project_id}/sourcemaps", post(upload_sourcemap).put(upload_sourcemap))
         .layer(DefaultBodyLimit::max(max_body))
         .layer(cors)
         .with_state(state)
@@ -163,4 +166,38 @@ async fn store(
     };
     ingest::ingest_event_payload(&state.pool, &project, &payload).await?;
     Ok(Json(json!({ "id": id })))
+}
+
+/// Upload d'une source map : `POST /api/{id}/sourcemaps/?name=~/static/app.js.map&release=1.0`,
+/// corps = fichier `.map`, `Authorization: Bearer <jeton d'upload du projet>`.
+async fn upload_sourcemap(
+    State(state): State<AppState>,
+    Path(project_id): Path<u64>,
+    headers: HeaderMap,
+    RawQuery(query): RawQuery,
+    body: Bytes,
+) -> Result<Json<Value>, ApiError> {
+    let token = headers
+        .get(header::AUTHORIZATION)
+        .and_then(|v| v.to_str().ok())
+        .and_then(|v| v.strip_prefix("Bearer "))
+        .map(str::trim)
+        .ok_or_else(|| ApiError::new(StatusCode::UNAUTHORIZED, "jeton d'upload manquant"))?;
+    if !projects::authorize_upload(&state.pool, project_id, token).await? {
+        return Err(ApiError::new(StatusCode::FORBIDDEN, "jeton ou projet invalide"));
+    }
+
+    let params: Vec<(String, String)> =
+        url::form_urlencoded::parse(query.as_deref().unwrap_or("").as_bytes()).into_owned().collect();
+    let param = |k: &str| params.iter().find(|(n, _)| n == k).map(|(_, v)| v.as_str()).filter(|v| !v.is_empty());
+    let name = param("name").ok_or_else(|| ApiError::new(StatusCode::BAD_REQUEST, "paramètre name requis"))?;
+
+    match sourcemaps::store_sourcemap(&state.pool, &state.store, project_id, param("release"), name, body).await {
+        Ok(()) => Ok(Json(json!({ "name": name }))),
+        Err(SourceMapError::Invalid(d)) => Err(ApiError::new(StatusCode::BAD_REQUEST, d)),
+        Err(e) => {
+            tracing::error!("échec d'upload de source map : {e}");
+            Err(ApiError::new(StatusCode::INTERNAL_SERVER_ERROR, "erreur interne"))
+        }
+    }
 }
