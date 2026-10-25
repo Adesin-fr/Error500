@@ -119,7 +119,8 @@ pub async fn ingest_event_payload(
          VALUES (?, ?, ?, ?, ?, ?, 1) \
          ON DUPLICATE KEY UPDATE id = LAST_INSERT_ID(id), event_count = event_count + 1, \
            first_seen = LEAST(first_seen, VALUES(first_seen)), \
-           last_seen = GREATEST(last_seen, VALUES(last_seen)), level = VALUES(level)",
+           last_seen = GREATEST(last_seen, VALUES(last_seen)), level = VALUES(level), \
+           status = IF(status = 'resolved', 'unresolved', status)",
     )
     .bind(project.id)
     .bind(&ev.fingerprint)
