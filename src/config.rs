@@ -10,6 +10,8 @@ pub struct Config {
     pub public_url: String,
     pub max_body: usize,
     pub storage: StorageConfig,
+    /// Serveur de développement Vite (`VITE_DEV_URL`) ; absent en production.
+    pub vite_dev_url: Option<String>,
 }
 
 impl Config {
@@ -29,7 +31,12 @@ impl Config {
             public_url: var("PUBLIC_URL").unwrap_or_else(|| "http://localhost:8080".into()),
             max_body: max_body_mb * 1024 * 1024,
             storage: StorageConfig::from_vars(&var)?,
+            vite_dev_url: var("VITE_DEV_URL"),
         })
+    }
+
+    pub fn secure_cookies(&self) -> bool {
+        self.public_url.starts_with("https://")
     }
 }
 
@@ -73,6 +80,22 @@ mod tests {
         assert_eq!(c.public_url, "https://err.example.com");
         assert_eq!(c.max_body, 5 * 1024 * 1024);
         assert!(matches!(c.storage, StorageConfig::S3 { .. }));
+    }
+
+    #[test]
+    fn vite_dev_url_is_optional() {
+        let c = Config::from_vars(vars(&[("DATABASE_URL", "mysql://x")])).unwrap();
+        assert_eq!(c.vite_dev_url, None);
+        let c = Config::from_vars(vars(&[("DATABASE_URL", "mysql://x"), ("VITE_DEV_URL", "http://localhost:5173")])).unwrap();
+        assert_eq!(c.vite_dev_url.as_deref(), Some("http://localhost:5173"));
+    }
+
+    #[test]
+    fn cookies_are_secure_only_behind_https() {
+        let http = Config::from_vars(vars(&[("DATABASE_URL", "mysql://x")])).unwrap();
+        assert!(!http.secure_cookies());
+        let https = Config::from_vars(vars(&[("DATABASE_URL", "mysql://x"), ("PUBLIC_URL", "https://err.example.com")])).unwrap();
+        assert!(https.secure_cookies());
     }
 
     #[test]

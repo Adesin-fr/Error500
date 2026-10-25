@@ -121,3 +121,33 @@ pub async fn delete_session(pool: &MySqlPool, token: &str) -> Result<(), UserErr
         .await?;
     Ok(())
 }
+
+pub async fn count(pool: &MySqlPool) -> Result<u64, sqlx::Error> {
+    let n: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM users").fetch_one(pool).await?;
+    Ok(n as u64)
+}
+
+#[derive(Debug, Clone, serde::Serialize, FromRow)]
+pub struct UserRow {
+    pub id: u64,
+    pub email: String,
+    pub name: String,
+    pub is_admin: bool,
+    pub created_at: chrono::DateTime<chrono::Utc>,
+}
+
+pub async fn list(pool: &MySqlPool) -> Result<Vec<UserRow>, sqlx::Error> {
+    sqlx::query_as("SELECT id, email, name, is_admin, created_at FROM users ORDER BY id").fetch_all(pool).await
+}
+
+pub async fn find_by_email(pool: &MySqlPool, email: &str) -> Result<Option<User>, sqlx::Error> {
+    sqlx::query_as("SELECT id, email, name, is_admin FROM users WHERE email = ?")
+        .bind(email.trim().to_lowercase())
+        .fetch_optional(pool)
+        .await
+}
+
+pub async fn set_admin(pool: &MySqlPool, user_id: u64, is_admin: bool) -> Result<(), sqlx::Error> {
+    sqlx::query("UPDATE users SET is_admin = ? WHERE id = ?").bind(is_admin).bind(user_id).execute(pool).await?;
+    Ok(())
+}

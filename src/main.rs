@@ -1,7 +1,6 @@
 use anyhow::{bail, Context};
 use error500::auth::build_dsn;
 use error500::config::Config;
-use error500::http::{router, AppState};
 use error500::storage::BlobStore;
 use error500::{projects, users};
 use sqlx::mysql::MySqlPoolOptions;
@@ -26,7 +25,7 @@ async fn main() -> anyhow::Result<()> {
     match args.iter().map(String::as_str).collect::<Vec<_>>().as_slice() {
         [] | ["serve"] => {
             let store = BlobStore::from_config(&config.storage)?;
-            let app = router(AppState { pool, store, max_body: config.max_body });
+            let app = error500::app(pool, store, &config);
             let listener = tokio::net::TcpListener::bind(&config.bind).await?;
             tracing::info!("écoute sur {}", config.bind);
             axum::serve(listener, app).await?;

@@ -296,3 +296,27 @@ pub async fn replay_events(
     }
     Ok(Some(events))
 }
+
+#[derive(Debug, Clone, Serialize, FromRow)]
+pub struct LinkedError {
+    pub event_id: String,
+    pub issue_id: u64,
+    pub title: String,
+}
+
+/// Erreurs du projet correspondant à ces identifiants d'événement (ceux inconnus sont ignorés).
+pub async fn linked_errors(pool: &MySqlPool, project_id: u64, event_ids: &[String]) -> Result<Vec<LinkedError>, sqlx::Error> {
+    if event_ids.is_empty() {
+        return Ok(Vec::new());
+    }
+    let placeholders = vec!["?"; event_ids.len()].join(", ");
+    let sql = format!(
+        "SELECT e.event_id, e.issue_id, e.title FROM events e WHERE e.project_id = ? AND e.event_id IN ({placeholders}) \
+         ORDER BY e.occurred_at"
+    );
+    let mut q = sqlx::query_as(sqlx::AssertSqlSafe(sql)).bind(project_id);
+    for id in event_ids {
+        q = q.bind(id);
+    }
+    q.fetch_all(pool).await
+}

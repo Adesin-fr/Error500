@@ -18,14 +18,14 @@ pub enum Role {
 }
 
 impl Role {
-    fn as_str(self) -> &'static str {
+    pub fn as_str(self) -> &'static str {
         match self {
             Role::Owner => "owner",
             Role::Member => "member",
         }
     }
 
-    fn parse(s: &str) -> Option<Role> {
+    pub fn parse(s: &str) -> Option<Role> {
         match s {
             "owner" => Some(Role::Owner),
             "member" => Some(Role::Member),
@@ -186,4 +186,68 @@ pub async fn rotate_upload_token(pool: &MySqlPool, project_id: u64) -> Result<St
         .execute(pool)
         .await?;
     Ok(token)
+}
+
+pub async fn get(pool: &MySqlPool, project_id: u64) -> Result<Option<Project>, sqlx::Error> {
+    sqlx::query_as("SELECT id, name, slug, public_key FROM projects WHERE id = ?")
+        .bind(project_id)
+        .fetch_optional(pool)
+        .await
+}
+
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct Member {
+    pub user_id: u64,
+    pub name: String,
+    pub email: String,
+    pub role: &'static str,
+}
+
+pub async fn list_members(pool: &MySqlPool, project_id: u64) -> Result<Vec<Member>, sqlx::Error> {
+    let rows: Vec<(u64, String, String, String)> = sqlx::query_as(
+        "SELECT u.id, u.name, u.email, m.role FROM project_members m JOIN users u ON u.id = m.user_id \
+         WHERE m.project_id = ? ORDER BY m.role, u.name",
+    )
+    .bind(project_id)
+    .fetch_all(pool)
+    .await?;
+    Ok(rows
+        .into_iter()
+        .filter_map(|(user_id, name, email, role)| {
+            Some(Member { user_id, name, email, role: Role::parse(&role)?.as_str() })
+        })
+        .collect())
+}
+
+#[derive(Debug, thiserror::Error)]
+pub enum RemoveMemberError {
+    #[error("le dernier propriétaire ne peut pas être retiré")]
+    LastOwner,
+    #[error(transparent)]
+    Db(#[from] sqlx::Error),
+}
+
+pub async fn remove_member(pool: &MySqlPool, project_id: u64, user_id: u64) -> Result<(), RemoveMemberError> {
+    let mut tx = pool.begin().await?;
+    let (owners,): (i64,) =
+        sqlx::query_as("SELECT COUNT(*) FROM project_members WHERE project_id = ? AND role = 'owner' FOR UPDATE")
+            .bind(project_id)
+            .fetch_one(&mut *tx)
+            .await?;
+    let is_owner: Option<(String,)> =
+        sqlx::query_as("SELECT role FROM project_members WHERE project_id = ? AND user_id = ? AND role = 'owner'")
+            .bind(project_id)
+            .bind(user_id)
+            .fetch_optional(&mut *tx)
+            .await?;
+    if is_owner.is_some() && owners <= 1 {
+        return Err(RemoveMemberError::LastOwner);
+    }
+    sqlx::query("DELETE FROM project_members WHERE project_id = ? AND user_id = ?")
+        .bind(project_id)
+        .bind(user_id)
+        .execute(&mut *tx)
+        .await?;
+    tx.commit().await?;
+    Ok(())
 }

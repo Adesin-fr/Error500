@@ -234,3 +234,58 @@ mod tests {
         assert_ne!(a.fingerprint, c.fingerprint);
     }
 }
+
+/// Contexte d'un événement pour l'affichage : utilisateur, requête, tags, breadcrumbs, contextes.
+/// Liste blanche de champs : les en-têtes et cookies de la requête ne sont volontairement pas exposés.
+pub fn context_view(payload: &Value) -> Value {
+    use serde_json::json;
+
+    let pick = |obj: Option<&Value>, keys: &[&str]| -> Value {
+        let mut out = serde_json::Map::new();
+        for k in keys {
+            if let Some(v) = obj.and_then(|o| o.get(*k)).filter(|v| !v.is_null()) {
+                out.insert((*k).to_string(), v.clone());
+            }
+        }
+        Value::Object(out)
+    };
+
+    let tags: Vec<Value> = match payload.get("tags") {
+        Some(Value::Object(m)) => m
+            .iter()
+            .map(|(k, v)| json!({"key": k, "value": v.as_str().map(str::to_string).unwrap_or_else(|| v.to_string())}))
+            .collect(),
+        Some(Value::Array(pairs)) => pairs
+            .iter()
+            .filter_map(|p| {
+                let p = p.as_array()?;
+                Some(json!({"key": p.first()?.as_str()?, "value": p.get(1)?.as_str().unwrap_or_default()}))
+            })
+            .collect(),
+        _ => Vec::new(),
+    };
+
+    let crumbs = payload.get("breadcrumbs").and_then(|b| b.get("values").unwrap_or(b).as_array());
+    let breadcrumbs: Vec<Value> = crumbs
+        .map(|list| {
+            let start = list.len().saturating_sub(50);
+            list[start..].iter().map(|c| pick(Some(c), &["timestamp", "type", "category", "level", "message", "data"])).collect()
+        })
+        .unwrap_or_default();
+
+    let contexts = payload.get("contexts");
+    json!({
+        "message": normalize(payload).message,
+        "user": pick(payload.get("user"), &["id", "email", "username", "ip_address"]),
+        "request": pick(payload.get("request"), &["url", "method", "query_string"]),
+        "tags": tags,
+        "breadcrumbs": breadcrumbs,
+        "contexts": {
+            "browser": pick(contexts.and_then(|c| c.get("browser")), &["name", "version"]),
+            "os": pick(contexts.and_then(|c| c.get("os")), &["name", "version"]),
+            "device": pick(contexts.and_then(|c| c.get("device")), &["family", "model", "brand"]),
+            "runtime": pick(contexts.and_then(|c| c.get("runtime")), &["name", "version"]),
+        },
+        "replay_id": contexts.and_then(|c| c.get("replay")).and_then(|r| r.get("replay_id")).and_then(Value::as_str),
+    })
+}
