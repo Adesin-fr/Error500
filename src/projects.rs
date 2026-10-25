@@ -166,6 +166,15 @@ pub async fn upload_token(pool: &MySqlPool, project_id: u64) -> Result<String, s
         .await
 }
 
+/// Projet auquel appartient ce jeton d'upload (sentry-cli ne transmet pas l'id du projet dans l'URL).
+pub async fn project_id_by_upload_token(pool: &MySqlPool, token: &str) -> Result<Option<u64>, sqlx::Error> {
+    if token.is_empty() {
+        return Ok(None);
+    }
+    let found: Option<(u64,)> = sqlx::query_as("SELECT id FROM projects WHERE upload_token = ?").bind(token).fetch_optional(pool).await?;
+    Ok(found.map(|(id,)| id))
+}
+
 pub async fn authorize_upload(pool: &MySqlPool, project_id: u64, token: &str) -> Result<bool, sqlx::Error> {
     if token.is_empty() {
         return Ok(false);

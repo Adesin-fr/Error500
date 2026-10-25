@@ -85,6 +85,14 @@ impl BlobStore {
         }
     }
 
+    pub async fn exists(&self, key: &str) -> object_store::Result<bool> {
+        match self.inner.head(&Path::from(key)).await {
+            Ok(_) => Ok(true),
+            Err(object_store::Error::NotFound { .. }) => Ok(false),
+            Err(e) => Err(e),
+        }
+    }
+
     pub async fn delete(&self, key: &str) -> object_store::Result<()> {
         match self.inner.delete(&Path::from(key)).await {
             Ok(()) | Err(object_store::Error::NotFound { .. }) => Ok(()),

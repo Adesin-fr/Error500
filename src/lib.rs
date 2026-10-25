@@ -8,6 +8,8 @@ pub mod ingest;
 pub mod http;
 pub mod config;
 pub mod sourcemaps;
+pub mod artifact_bundle;
+pub mod cli_upload;
 pub mod stacktrace;
 pub mod queries;
 pub mod web;

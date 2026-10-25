@@ -42,6 +42,8 @@ Backend (`src/`) :
 - `projects` : projets, membres (`owner`/`member`), clé publique, jeton d'upload, rotation. Un admin voit tous les projets.
 - `event` : normalisation d'un événement, empreinte de regroupement en issues, contexte d'affichage (liste blanche de champs).
 - `ingest` : envelope → issues/events, logs, replays (segments rrweb décompressés : JSON, zlib, gzip ou deflate brut ; stockés dans le `BlobStore`).
+- `artifact_bundle` : lecture de l'archive zip de sentry-cli (`manifest.json`, source maps, `debug-id`).
+- `cli_upload` : protocole de `sentry-cli sourcemaps upload` (`/api/0/organizations/{org}/chunk-upload/`, `artifactbundle/assemble/`, releases). Le projet est celui du jeton d'upload ; le slug d'organisation est ignoré. Les chunks (`chunks/{projet}/{sha1}`) ne sont pas purgés.
 - `sourcemaps` : stockage par projet, association par `debug_id` ou release + chemin (`~/static/app.js.map`), résolution des frames.
 - `stacktrace` : vue exceptions/frames (le plus récent d'abord). Le nom d'une fonction vient du token de **l'appelant** (le nom d'une map à une position est celui de la fonction appelée).
 - `queries` : lectures pour l'UI (issues, événements, logs, replays, erreurs liées).
@@ -76,8 +78,16 @@ Tests : `cargo test` (base en RAM démarrée) et `cd frontend && npm test`. `npm
 
 ## Source maps
 
-`POST /api/{id}/sourcemaps/?release=1.0.0&name=~%2Fstatic%2Fapp.min.js.map` avec `Authorization: Bearer <jeton d'upload>` (affiché dans Réglages) et le fichier `.map` en corps. Association : `debug_id` (`debug_meta` de l'événement ↔ `debugId` de la map) en priorité, sinon release + chemin. Ce n'est pas le protocole de `sentry-cli` (chunk upload) : utiliser `curl`.
+Avec **sentry-cli** (testé avec la 3.8.2), jeton d'upload affiché dans Réglages :
+
+```
+export SENTRY_URL=https://error500.example.com SENTRY_AUTH_TOKEN=<jeton d'upload> SENTRY_ORG=x SENTRY_PROJECT=x
+sentry-cli sourcemaps inject ./dist
+sentry-cli sourcemaps upload --release 1.0.0 ./dist
+```
+
+Ou avec `curl` : `POST /api/{id}/sourcemaps/?release=1.0.0&name=~%2Fstatic%2Fapp.min.js.map` avec `Authorization: Bearer <jeton d'upload>` et le fichier `.map` en corps. Association : `debug_id` (`debug_meta` de l'événement ↔ `debugId` de la map ou en-tête `debug-id` du manifeste) en priorité, sinon release + chemin.
 
 ## Reste à faire
 
-Test réel contre un S3 (seul le local et la construction S3 sont testés) ; protocole `sentry-cli` pour les source maps ; replays mobiles (`replay_video`) ; alertes/notifications ; suppression de projets ; rétention des données.
+Test réel contre un S3 (seul le local et la construction S3 sont testés) ; `sentry-cli` : seul l'upload par archive (`artifact_bundles`) est géré, pas les anciens `releases files` ni les fichiers de debug ; replays mobiles (`replay_video`) ; alertes/notifications ; suppression de projets ; rétention des données.

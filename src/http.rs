@@ -47,16 +47,17 @@ pub fn router(state: AppState) -> Router {
         .route("/api/{project_id}/store", post(store))
         .route("/api/{project_id}/sourcemaps/", post(upload_sourcemap).put(upload_sourcemap))
         .route("/api/{project_id}/sourcemaps", post(upload_sourcemap).put(upload_sourcemap))
+        .merge(crate::cli_upload::routes())
         .layer(DefaultBodyLimit::max(max_body))
         .layer(cors)
         .with_state(state)
 }
 
 #[derive(Debug)]
-struct ApiError(StatusCode, String);
+pub struct ApiError(StatusCode, String);
 
 impl ApiError {
-    fn new(status: StatusCode, detail: impl Into<String>) -> Self {
+    pub fn new(status: StatusCode, detail: impl Into<String>) -> Self {
         ApiError(status, detail.into())
     }
 }

@@ -111,12 +111,26 @@ pub async fn store_sourcemap(
     name: &str,
     bytes: Bytes,
 ) -> Result<(), SourceMapError> {
+    store_sourcemap_with_debug_id(pool, store, project_id, release, name, bytes, None).await
+}
+
+/// Comme [`store_sourcemap`], avec un `debug_id` connu par ailleurs (en-tête du manifeste d'une
+/// archive sentry-cli) qui prime sur celui que la map contient éventuellement.
+pub async fn store_sourcemap_with_debug_id(
+    pool: &MySqlPool,
+    store: &BlobStore,
+    project_id: u64,
+    release: Option<&str>,
+    name: &str,
+    bytes: Bytes,
+    debug_id: Option<&str>,
+) -> Result<(), SourceMapError> {
     parse_map(&bytes).map_err(SourceMapError::Invalid)?;
     let release_key = release.unwrap_or("");
     let hash = name_hash(name);
     let blob_key = format!("sourcemaps/{project_id}/{}", hex::encode(Sha256::digest([release_key.as_bytes(), b"\0", name.as_bytes()].concat())));
     let size = bytes.len() as u64;
-    let debug_id = debug_id_of(&bytes);
+    let debug_id = debug_id.map(str::to_string).or_else(|| debug_id_of(&bytes));
     store.put(&blob_key, bytes).await?;
     sqlx::query(
         "INSERT INTO sourcemaps (project_id, release_key, name, name_hash, debug_id, blob_key, size_bytes) \
