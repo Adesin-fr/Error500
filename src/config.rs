@@ -1,6 +1,8 @@
 //! Configuration de l'application, lue depuis l'environnement.
 
 use crate::storage::StorageConfig;
+use std::collections::HashMap;
+use std::path::Path;
 
 #[derive(Debug, Clone)]
 pub struct Config {
@@ -15,13 +17,37 @@ pub struct Config {
     /// Serveur SMTP des alertes (`SMTP_URL`, ex. `smtps://user:pass@host`) ; sans lui, pas d'email.
     pub smtp_url: Option<String>,
     pub mail_from: String,
+    /// Filtre des journaux (`RUST_LOG`, syntaxe tracing) ; `info` par défaut.
+    pub log_filter: String,
     /// Alertes email maximum par projet et par heure (`ALERT_MAX_PER_HOUR`, 0 = illimité).
     pub alert_limit: u32,
 }
 
+/// Variables d'un fichier `.env` (`CLE=valeur`, commentaires `#`, guillemets optionnels).
+pub fn parse_env_file(content: &str) -> HashMap<String, String> {
+    dotenvy::from_read_iter(content.as_bytes()).filter_map(Result::ok).collect()
+}
+
+/// Lit un fichier `.env` ; un fichier absent donne un jeu vide.
+pub fn read_env_file(path: &Path) -> anyhow::Result<HashMap<String, String>> {
+    match std::fs::read_to_string(path) {
+        Ok(content) => Ok(parse_env_file(&content)),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(HashMap::new()),
+        Err(e) => Err(anyhow::anyhow!("lecture de {} : {e}", path.display())),
+    }
+}
+
+/// L'environnement réel prime sur le fichier.
+pub fn layered(env: impl Fn(&str) -> Option<String>, file: HashMap<String, String>) -> impl Fn(&str) -> Option<String> {
+    move |k| env(k).or_else(|| file.get(k).cloned())
+}
+
 impl Config {
+    /// Environnement, complété par le fichier `.env` du répertoire courant (ou `ENV_FILE`).
     pub fn from_env() -> anyhow::Result<Self> {
-        Self::from_vars(|k| std::env::var(k).ok())
+        let path = std::env::var("ENV_FILE").unwrap_or_else(|_| ".env".into());
+        let file = read_env_file(Path::new(&path))?;
+        Self::from_vars(layered(|k| std::env::var(k).ok(), file))
     }
 
     pub fn from_vars(var: impl Fn(&str) -> Option<String>) -> anyhow::Result<Self> {
@@ -38,6 +64,7 @@ impl Config {
             storage: StorageConfig::from_vars(&var)?,
             vite_dev_url: var("VITE_DEV_URL"),
             smtp_url: var("SMTP_URL").filter(|v| !v.is_empty()),
+            log_filter: var("RUST_LOG").unwrap_or_else(|| "info".into()),
             alert_limit: match var("ALERT_MAX_PER_HOUR") {
                 Some(v) => v.parse().map_err(|_| anyhow::anyhow!("ALERT_MAX_PER_HOUR invalide : {v}"))?,
                 None => 10,
@@ -65,6 +92,29 @@ mod tests {
 
     fn vars(pairs: &'static [(&'static str, &'static str)]) -> impl Fn(&str) -> Option<String> {
         move |k| pairs.iter().find(|(n, _)| *n == k).map(|(_, v)| v.to_string())
+    }
+
+    #[test]
+    fn env_file_values_are_read_and_real_environment_wins() {
+        let file = "# commentaire\nDATABASE_URL=mysql://file\nBIND=\"127.0.0.1:9000\"\nMAX_BODY_MB = 7\n\nPUBLIC_URL='https://err.example.com'\n";
+        let c = Config::from_vars(layered(vars(&[("BIND", "0.0.0.0:1")]), parse_env_file(file))).unwrap();
+        assert_eq!(c.database_url, "mysql://file");
+        assert_eq!(c.bind, "0.0.0.0:1", "la variable d'environnement prime sur le fichier");
+        assert_eq!(c.max_body, 7 * 1024 * 1024);
+        assert_eq!(c.public_url, "https://err.example.com");
+    }
+
+    #[test]
+    fn log_filter_defaults_to_info_and_follows_rust_log() {
+        let c = Config::from_vars(vars(&[("DATABASE_URL", "mysql://x")])).unwrap();
+        assert_eq!(c.log_filter, "info");
+        let c = Config::from_vars(vars(&[("DATABASE_URL", "mysql://x"), ("RUST_LOG", "error500=debug,warn")])).unwrap();
+        assert_eq!(c.log_filter, "error500=debug,warn");
+    }
+
+    #[test]
+    fn missing_env_file_is_not_an_error() {
+        assert!(read_env_file(std::path::Path::new("/nonexistent/.env")).unwrap().is_empty());
     }
 
     #[test]

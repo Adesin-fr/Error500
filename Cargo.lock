@@ -569,6 +569,7 @@ dependencies = [
  "axum",
  "bytes",
  "chrono",
+ "dotenvy",
  "flate2",
  "futures",
  "hex",

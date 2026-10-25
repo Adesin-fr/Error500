@@ -53,7 +53,7 @@ Backend (`src/`) :
 - `storage` : `BlobStore` (disque local, S3 ou mémoire) via `object_store`.
 - `http` : API d'ingestion `/api/{id}/envelope/`, `/store/`, `/sourcemaps/` (Bearer), `/health` ; gzip/deflate, CORS, limite de taille.
 - `web` : pages Inertia (`inertia_rs`) : `auth`, `projects`, `issues`, `replays`, `logs`, `settings`, `admin`, assets embarqués. 404 (pas 403) sur un projet inaccessible.
-- `config` : variables d'environnement (`DATABASE_URL`, `BIND`, `PUBLIC_URL`, `MAX_BODY_MB`, `STORAGE`, `STORAGE_PATH`, `S3_*`, `SMTP_URL`, `MAIL_FROM`, `ALERT_MAX_PER_HOUR`, `VITE_DEV_URL`).
+- `config` : variables d'environnement, complétées par un fichier `.env` du répertoire courant (ou `ENV_FILE`) ; l'environnement réel prime. `.env` est ignoré par git, `.env.example` (versionné) liste toutes les options. Variables : (`DATABASE_URL`, `BIND`, `PUBLIC_URL`, `MAX_BODY_MB`, `STORAGE`, `STORAGE_PATH`, `S3_*`, `SMTP_URL`, `MAIL_FROM`, `ALERT_MAX_PER_HOUR`, `RUST_LOG`, `VITE_DEV_URL`).
 - `lib.rs::app` : routeur unique (ingestion + web). Migrations SQL dans `migrations/` (appliquées au démarrage).
 
 Frontend (`frontend/`, Vue 3 + TypeScript + Vite, `<script setup>`) :
@@ -68,6 +68,7 @@ Frontend (`frontend/`, Vue 3 + TypeScript + Vite, `<script setup>`) :
 
 ```
 scripts/test-db.sh start   # ou toute autre base MariaDB/MySQL
+cp .env.example .env   # puis l'adapter ; ou exporter les variables à la main :
 export DATABASE_URL=mysql://root@127.0.0.1:3307/error500_test PUBLIC_URL=http://localhost:8080
 
 (cd frontend && npm install && npm run build)   # une fois, puis à chaque changement du frontend
