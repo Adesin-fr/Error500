@@ -33,7 +33,7 @@ async fn app() -> App {
     let u = users::create_user(&db.pool, "a@example.com", "A", "correct horse").await.unwrap();
     let project = projects::create_project(&db.pool, u.id, "App").await.unwrap();
     let token = projects::upload_token(&db.pool, project.id).await.unwrap();
-    let router = router(AppState { pool: db.pool.clone(), store: BlobStore::memory(), max_body: 1024 * 1024, mailer: error500::alerts::Mailer::disabled(), public_url: "http://localhost".into() });
+    let router = router(AppState { pool: db.pool.clone(), store: BlobStore::memory(), max_body: 1024 * 1024, mailer: error500::alerts::Mailer::disabled(), public_url: "http://localhost".into(), alert_limit: 0 });
     App { db, project, token, router }
 }
 

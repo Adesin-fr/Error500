@@ -25,6 +25,7 @@ pub fn app(pool: sqlx::MySqlPool, store: storage::BlobStore, mailer: alerts::Mai
         max_body: config.max_body,
         mailer,
         public_url: config.public_url.clone(),
+        alert_limit: config.alert_limit,
     });
     let web = web::router(web::WebState {
         pool,

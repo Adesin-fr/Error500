@@ -87,13 +87,57 @@ impl Mailer {
     }
 }
 
-/// Envoie l'alerte à chaque membre du projet qui reçoit les notifications.
+/// Réserve une alerte dans le budget horaire du projet (fenêtre fixe d'une heure).
+/// `None` : budget épuisé, l'alerte est comptée comme supprimée. `Some(n)` : envoi autorisé,
+/// `n` alertes avaient été supprimées depuis le dernier envoi. `limit == 0` : pas de limite.
+async fn take_budget(pool: &MySqlPool, project_id: u64, limit: u32) -> Result<Option<u32>, sqlx::Error> {
+    if limit == 0 {
+        return Ok(Some(0));
+    }
+    let mut tx = pool.begin().await?;
+    sqlx::query("INSERT IGNORE INTO alert_throttle (project_id, window_start) VALUES (?, NOW())")
+        .bind(project_id)
+        .execute(&mut *tx)
+        .await?;
+    let (sent, suppressed, expired): (u32, u32, bool) = sqlx::query_as(
+        "SELECT sent, suppressed, window_start < NOW() - INTERVAL 1 HOUR FROM alert_throttle \
+         WHERE project_id = ? FOR UPDATE",
+    )
+    .bind(project_id)
+    .fetch_one(&mut *tx)
+    .await?;
+    let sent = if expired { 0 } else { sent };
+    let granted = if sent < limit {
+        sqlx::query(
+            "UPDATE alert_throttle SET sent = ?, suppressed = 0, \
+             window_start = IF(?, NOW(), window_start) WHERE project_id = ?",
+        )
+        .bind(sent + 1)
+        .bind(expired)
+        .bind(project_id)
+        .execute(&mut *tx)
+        .await?;
+        Some(suppressed)
+    } else {
+        sqlx::query("UPDATE alert_throttle SET suppressed = suppressed + 1 WHERE project_id = ?")
+            .bind(project_id)
+            .execute(&mut *tx)
+            .await?;
+        None
+    };
+    tx.commit().await?;
+    Ok(granted)
+}
+
+/// Envoie l'alerte à chaque membre du projet qui reçoit les notifications, dans la limite de
+/// `limit` alertes par heure et par projet (0 = illimité).
 pub async fn notify(
     pool: &MySqlPool,
     mailer: &Mailer,
     public_url: &str,
     project: &Project,
     alert: &Alert,
+    limit: u32,
 ) -> Result<(), sqlx::Error> {
     if matches!(mailer, Mailer::Disabled) {
         return Ok(());
@@ -111,18 +155,30 @@ pub async fn notify(
     .fetch_all(pool)
     .await?;
 
+    if recipients.is_empty() {
+        return Ok(());
+    }
+    let Some(suppressed) = take_budget(pool, project.id, limit).await? else {
+        return Ok(());
+    };
+
     let label = match alert.trigger {
         AlertTrigger::NewIssue => "New issue",
         AlertTrigger::Regression => "Regression",
     };
     let link = format!("{}/projects/{}/issues/{}", public_url.trim_end_matches('/'), project.id, alert.issue_id);
     let subject = format!("[{}] {label}: {title}", project.name);
-    let body = format!(
+    let mut body = format!(
         "{label} in {project}\n\n{title}\nLevel: {level}\n\n{link}\n\n\
          You receive this because you are a member of {project}. \
          You can turn these emails off in the project settings.\n",
         project = project.name
     );
+    if suppressed > 0 {
+        body.push_str(&format!(
+            "\n{suppressed} alert(s) were suppressed since the last email (limit: {limit} per hour per project).\n"
+        ));
+    }
     for (to,) in recipients {
         mailer.send(Mail { to, subject: subject.clone(), body: body.clone() });
     }

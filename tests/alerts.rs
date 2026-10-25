@@ -23,6 +23,11 @@ struct App {
 }
 
 async fn app() -> App {
+    app_with_limit(0).await
+}
+
+/// `limit` : alertes par projet et par heure (0 = pas de limite).
+async fn app_with_limit(limit: u32) -> App {
     let db = TestDb::new().await;
     let owner = users::create_user(&db.pool, "owner@example.com", "Owner", "correct horse").await.unwrap();
     let project = projects::create_project(&db.pool, owner.id, "Mon App").await.unwrap();
@@ -33,6 +38,7 @@ async fn app() -> App {
         max_body: 1024 * 1024,
         mailer: mailer.clone(),
         public_url: "https://errors.example.com".into(),
+        alert_limit: limit,
     });
     App { db, project, mailer, router }
 }
@@ -133,11 +139,86 @@ async fn disabled_mailer_ignores_alerts_without_failing_ingestion() {
         max_body: 1024 * 1024,
         mailer: Mailer::disabled(),
         public_url: "http://x".into(),
+        alert_limit: 0,
     });
     let a = App { router, ..a };
     send_error(&a, E3, "boom").await;
     let n: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM events").fetch_one(&a.db.pool).await.unwrap();
     assert_eq!(n, 1);
+    a.db.cleanup().await;
+}
+
+// --- Limitation du débit ---
+
+const E4: &str = "dddddddddddddddddddddddddddddddd";
+
+#[tokio::test]
+async fn alerts_beyond_the_hourly_limit_are_suppressed() {
+    let a = app_with_limit(2).await;
+    for (id, msg) in [(E1, "un"), (E2, "deux"), (E3, "trois")] {
+        send_error(&a, id, msg).await;
+    }
+    let subjects: Vec<String> = a.mailer.outbox().into_iter().map(|m| m.subject).collect();
+    assert_eq!(subjects.len(), 2, "{subjects:?}");
+    assert!(subjects[0].contains("un") && subjects[1].contains("deux"));
+    a.db.cleanup().await;
+}
+
+#[tokio::test]
+async fn limit_counts_alerts_not_recipients() {
+    let a = app_with_limit(1).await;
+    let bob = users::create_user(&a.db.pool, "bob@example.com", "Bob", "correct horse").await.unwrap();
+    projects::add_member(&a.db.pool, a.project.id, bob.id, Role::Member).await.unwrap();
+    send_error(&a, E1, "un").await;
+    assert_eq!(a.mailer.outbox().len(), 2, "un envoi par membre");
+    send_error(&a, E2, "deux").await;
+    assert_eq!(a.mailer.outbox().len(), 2);
+    a.db.cleanup().await;
+}
+
+#[tokio::test]
+async fn a_new_window_resumes_alerts_and_reports_what_was_suppressed() {
+    let a = app_with_limit(1).await;
+    send_error(&a, E1, "un").await;
+    send_error(&a, E2, "deux").await;
+    send_error(&a, E3, "trois").await;
+    assert_eq!(a.mailer.outbox().len(), 1);
+
+    sqlx::query("UPDATE alert_throttle SET window_start = NOW() - INTERVAL 2 HOUR").execute(&a.db.pool).await.unwrap();
+    send_error(&a, E4, "quatre").await;
+    let outbox = a.mailer.outbox();
+    assert_eq!(outbox.len(), 2);
+    assert!(outbox[1].body.contains("2 alert"), "{}", outbox[1].body);
+    assert!(!outbox[0].body.contains("suppressed"), "{}", outbox[0].body);
+
+    // le compteur est remis à zéro une fois annoncé
+    sqlx::query("UPDATE alert_throttle SET window_start = NOW() - INTERVAL 2 HOUR").execute(&a.db.pool).await.unwrap();
+    send_error(&a, "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee", "cinq").await;
+    assert!(!a.mailer.outbox()[2].body.contains("suppressed"));
+    a.db.cleanup().await;
+}
+
+#[tokio::test]
+async fn the_limit_is_per_project() {
+    let a = app_with_limit(1).await;
+    let owner = users::find_by_email(&a.db.pool, "owner@example.com").await.unwrap().unwrap();
+    let other = projects::create_project(&a.db.pool, owner.id, "Autre").await.unwrap();
+    send_error(&a, E1, "un").await;
+    send_error(&a, E2, "deux").await;
+    assert_eq!(a.mailer.outbox().len(), 1);
+
+    let ev = json!({"event_id": E3, "level": "error", "timestamp": 1700000000,
+                    "exception": {"values": [{"type": "Error", "value": "ailleurs"}]}})
+    .to_string();
+    let body = format!("{{\"event_id\":\"{E3}\"}}\n{{\"type\":\"event\",\"length\":{}}}\n{ev}\n", ev.len());
+    let req = Request::builder()
+        .method(Method::POST)
+        .uri(format!("/api/{}/envelope/", other.id))
+        .header("X-Sentry-Auth", format!("Sentry sentry_version=7, sentry_key={}", other.public_key))
+        .body(Body::from(body))
+        .unwrap();
+    assert_eq!(a.router.clone().oneshot(req).await.unwrap().status(), StatusCode::OK);
+    assert_eq!(a.mailer.outbox().len(), 2);
     a.db.cleanup().await;
 }
 

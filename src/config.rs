@@ -15,6 +15,8 @@ pub struct Config {
     /// Serveur SMTP des alertes (`SMTP_URL`, ex. `smtps://user:pass@host`) ; sans lui, pas d'email.
     pub smtp_url: Option<String>,
     pub mail_from: String,
+    /// Alertes email maximum par projet et par heure (`ALERT_MAX_PER_HOUR`, 0 = illimité).
+    pub alert_limit: u32,
 }
 
 impl Config {
@@ -36,6 +38,10 @@ impl Config {
             storage: StorageConfig::from_vars(&var)?,
             vite_dev_url: var("VITE_DEV_URL"),
             smtp_url: var("SMTP_URL").filter(|v| !v.is_empty()),
+            alert_limit: match var("ALERT_MAX_PER_HOUR") {
+                Some(v) => v.parse().map_err(|_| anyhow::anyhow!("ALERT_MAX_PER_HOUR invalide : {v}"))?,
+                None => 10,
+            },
             mail_from: var("MAIL_FROM").unwrap_or_else(|| "error500@localhost".into()),
         })
     }
@@ -89,6 +95,15 @@ mod tests {
         .unwrap();
         assert_eq!(c.smtp_url.as_deref(), Some("smtps://u:p@smtp.example.com"));
         assert_eq!(c.mail_from, "Error500 <errors@example.com>");
+    }
+
+    #[test]
+    fn alert_limit_defaults_to_ten_per_hour_and_is_configurable() {
+        let c = Config::from_vars(vars(&[("DATABASE_URL", "mysql://x")])).unwrap();
+        assert_eq!(c.alert_limit, 10);
+        let c = Config::from_vars(vars(&[("DATABASE_URL", "mysql://x"), ("ALERT_MAX_PER_HOUR", "0")])).unwrap();
+        assert_eq!(c.alert_limit, 0);
+        assert!(Config::from_vars(vars(&[("DATABASE_URL", "mysql://x"), ("ALERT_MAX_PER_HOUR", "beaucoup")])).is_err());
     }
 
     #[test]

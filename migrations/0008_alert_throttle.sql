@@ -1,0 +1,7 @@
+CREATE TABLE alert_throttle (
+    project_id BIGINT UNSIGNED NOT NULL PRIMARY KEY,
+    window_start DATETIME NOT NULL,
+    sent INT UNSIGNED NOT NULL DEFAULT 0,
+    suppressed INT UNSIGNED NOT NULL DEFAULT 0,
+    FOREIGN KEY (project_id) REFERENCES projects(id) ON DELETE CASCADE
+) CHARACTER SET utf8mb4;

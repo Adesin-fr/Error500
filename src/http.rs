@@ -27,6 +27,8 @@ pub struct AppState {
     pub mailer: crate::alerts::Mailer,
     /// URL publique de l'application, pour les liens des emails d'alerte.
     pub public_url: String,
+    /// Alertes email maximum par projet et par heure (0 = illimité).
+    pub alert_limit: u32,
 }
 
 pub fn router(state: AppState) -> Router {
@@ -133,7 +135,7 @@ async fn authorize(pool: &MySqlPool, project_id: u64, key: Option<String>) -> Re
 /// Une alerte qui échoue ne doit jamais faire échouer l'ingestion de l'événement.
 async fn send_alerts(state: &AppState, project: &Project, alerts: &[ingest::Alert]) {
     for alert in alerts {
-        if let Err(e) = crate::alerts::notify(&state.pool, &state.mailer, &state.public_url, project, alert).await {
+        if let Err(e) = crate::alerts::notify(&state.pool, &state.mailer, &state.public_url, project, alert, state.alert_limit).await {
             tracing::warn!("alerte non envoyée : {e}");
         }
     }
