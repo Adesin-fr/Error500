@@ -210,11 +210,13 @@ pub struct Member {
     pub name: String,
     pub email: String,
     pub role: &'static str,
+    /// Reçoit les alertes email du projet.
+    pub notify: bool,
 }
 
 pub async fn list_members(pool: &MySqlPool, project_id: u64) -> Result<Vec<Member>, sqlx::Error> {
-    let rows: Vec<(u64, String, String, String)> = sqlx::query_as(
-        "SELECT u.id, u.name, u.email, m.role FROM project_members m JOIN users u ON u.id = m.user_id \
+    let rows: Vec<(u64, String, String, String, bool)> = sqlx::query_as(
+        "SELECT u.id, u.name, u.email, m.role, m.notify FROM project_members m JOIN users u ON u.id = m.user_id \
          WHERE m.project_id = ? ORDER BY m.role, u.name",
     )
     .bind(project_id)
@@ -222,10 +224,31 @@ pub async fn list_members(pool: &MySqlPool, project_id: u64) -> Result<Vec<Membe
     .await?;
     Ok(rows
         .into_iter()
-        .filter_map(|(user_id, name, email, role)| {
-            Some(Member { user_id, name, email, role: Role::parse(&role)?.as_str() })
+        .filter_map(|(user_id, name, email, role, notify)| {
+            Some(Member { user_id, name, email, role: Role::parse(&role)?.as_str(), notify })
         })
         .collect())
+}
+
+/// Active ou coupe les alertes email d'un membre pour ce projet.
+pub async fn set_notifications(pool: &MySqlPool, project_id: u64, user_id: u64, enabled: bool) -> Result<(), sqlx::Error> {
+    sqlx::query("UPDATE project_members SET notify = ? WHERE project_id = ? AND user_id = ?")
+        .bind(enabled)
+        .bind(project_id)
+        .bind(user_id)
+        .execute(pool)
+        .await?;
+    Ok(())
+}
+
+/// Préférence d'alertes de ce membre ; `None` s'il n'est pas membre (ex. admin qui consulte le projet).
+pub async fn notifications_enabled(pool: &MySqlPool, project_id: u64, user_id: u64) -> Result<Option<bool>, sqlx::Error> {
+    let row: Option<(bool,)> = sqlx::query_as("SELECT notify FROM project_members WHERE project_id = ? AND user_id = ?")
+        .bind(project_id)
+        .bind(user_id)
+        .fetch_optional(pool)
+        .await?;
+    Ok(row.map(|(n,)| n))
 }
 
 #[derive(Debug, thiserror::Error)]

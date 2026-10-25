@@ -13,6 +13,8 @@ const props = defineProps<
     upload_url: string
     upload_token: string | null
     members: Member[]
+    /** Préférence d'alertes e-mail de l'utilisateur ; null s'il n'est pas membre du projet. */
+    notifications: boolean | null
     sourcemaps: SourceMapEntry[]
     errors: FormErrors
   }
@@ -31,6 +33,7 @@ function confirmThen(message: string, action: () => void) {
   if (window.confirm(message)) action()
 }
 
+const setNotifications = (enabled: boolean) => router.post(`${base.value}/notifications`, { enabled }, opts)
 const removeMember = (m: Member) =>
   confirmThen(`Retirer ${m.name} du projet ?`, () => router.delete(`${base.value}/members/${m.user_id}`, opts))
 const rotateKey = () =>
@@ -57,6 +60,19 @@ const snippet = computed(
         <h2>Configuration du SDK</h2>
         <CopyField label="DSN" :value="dsn" />
         <div v-if="can_manage"><button type="button" class="btn btn-danger rotate-key" @click="rotateKey">Régénérer la clé</button></div>
+      </section>
+
+      <section v-if="notifications !== null" class="card stack">
+        <h2>Alertes e-mail</h2>
+        <label class="row">
+          <input
+            class="notifications"
+            type="checkbox"
+            :checked="notifications"
+            @change="setNotifications(($event.target as HTMLInputElement).checked)"
+          />
+          Recevoir un e-mail pour chaque nouvelle issue et chaque régression de ce projet
+        </label>
       </section>
 
       <section class="card stack">

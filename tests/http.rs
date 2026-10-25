@@ -29,7 +29,7 @@ async fn app_with_limit(max_body: usize) -> App {
     let u = users::create_user(&db.pool, "a@example.com", "A", "correct horse").await.unwrap();
     let project = projects::create_project(&db.pool, u.id, "App").await.unwrap();
     let store = BlobStore::memory();
-    let router = router(AppState { pool: db.pool.clone(), store: store.clone(), max_body });
+    let router = router(AppState { pool: db.pool.clone(), store: store.clone(), max_body, mailer: error500::alerts::Mailer::disabled(), public_url: "http://localhost".into() });
     App { db, store, project, router }
 }
 

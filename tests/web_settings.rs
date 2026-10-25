@@ -187,3 +187,43 @@ async fn admin_pages_are_hidden_from_regular_users() {
     assert_eq!(n, 2);
     w.db.cleanup().await;
 }
+
+#[tokio::test]
+async fn a_member_turns_their_own_email_alerts_off_and_on() {
+    let w = web_app().await;
+    let (p, _) = setup(&w).await;
+    let (bob, bob_cookie) = w.login_as("bob@example.com").await;
+    projects::add_member(&w.db.pool, p.id, bob, Role::Member).await.unwrap();
+    let url = format!("/projects/{}/settings", p.id);
+    assert_eq!(w.get(&url, Some(&bob_cookie)).await.props()["notifications"], true);
+
+    let r = w.post_json(&format!("/projects/{}/notifications", p.id), Some(&bob_cookie), json!({"enabled": false})).await;
+    assert_eq!(r.status, StatusCode::SEE_OTHER);
+    assert_eq!(r.location(), Some(url.clone()));
+    assert_eq!(w.get(&url, Some(&bob_cookie)).await.props()["notifications"], false);
+    // la préférence d'un membre n'affecte pas celle des autres
+    let members = projects::list_members(&w.db.pool, p.id).await.unwrap();
+    assert!(members.iter().find(|m| m.email == "alice@example.com").unwrap().notify);
+
+    w.post_json(&format!("/projects/{}/notifications", p.id), Some(&bob_cookie), json!({"enabled": true})).await;
+    assert_eq!(w.get(&url, Some(&bob_cookie)).await.props()["notifications"], true);
+    w.db.cleanup().await;
+}
+
+#[tokio::test]
+async fn non_members_cannot_set_alerts_and_admins_outside_the_project_have_no_preference() {
+    let w = web_app().await;
+    let (_, admin_cookie) = w.login_as("admin@example.com").await;
+    let (alice, _) = w.login_as("alice@example.com").await;
+    let p = w.project_for(alice, "App").await;
+    let (_, eve_cookie) = w.login_as("eve@example.com").await;
+    let r = w.post_json(&format!("/projects/{}/notifications", p.id), Some(&eve_cookie), json!({"enabled": false})).await;
+    assert_eq!(r.status, StatusCode::NOT_FOUND);
+
+    // admin : voit le projet sans en être membre -> pas de préférence
+    let r = w.get(&format!("/projects/{}/settings", p.id), Some(&admin_cookie)).await;
+    assert!(r.props()["notifications"].is_null());
+    let r = w.post_json(&format!("/projects/{}/notifications", p.id), Some(&admin_cookie), json!({"enabled": false})).await;
+    assert_eq!(r.status, StatusCode::NOT_FOUND);
+    w.db.cleanup().await;
+}

@@ -21,8 +21,22 @@ pub enum IngestError {
     Storage(#[from] object_store::Error),
 }
 
+/// Pourquoi un événement mérite une alerte : première occurrence d'une issue, ou issue résolue qui revient.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AlertTrigger {
+    NewIssue,
+    Regression,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Alert {
+    pub issue_id: u64,
+    pub trigger: AlertTrigger,
+}
+
 #[derive(Debug, Default, Clone, PartialEq, Eq)]
 pub struct IngestSummary {
+    pub alerts: Vec<Alert>,
     pub events: usize,
     pub logs: usize,
     pub replay_segments: usize,
@@ -69,8 +83,9 @@ pub async fn ingest_envelope(
                     .map_err(|e| IngestError::BadPayload(format!("event : {e}")))?;
                 if payload.get("type").and_then(Value::as_str) == Some("transaction") {
                     summary.ignored += 1;
-                } else if ingest_event_payload(pool, project, &payload).await? {
+                } else if let Some(stored) = ingest_event_payload(pool, project, &payload).await? {
                     summary.events += 1;
+                    summary.alerts.extend(stored);
                 }
             }
             "log" => {
@@ -93,12 +108,12 @@ pub async fn ingest_envelope(
 }
 
 /// Stocke un événement d'erreur (aussi utilisé par l'endpoint historique `/store/`).
-/// Renvoie `false` si l'événement existait déjà (réémission du SDK).
+/// Renvoie `None` si l'événement existait déjà (réémission du SDK), sinon l'éventuelle alerte à envoyer.
 pub async fn ingest_event_payload(
     pool: &MySqlPool,
     project: &Project,
     payload: &Value,
-) -> Result<bool, IngestError> {
+) -> Result<Option<Option<Alert>>, IngestError> {
     let ev: NormalizedEvent = normalize(payload);
     let mut tx = pool.begin().await?;
 
@@ -108,8 +123,20 @@ pub async fn ingest_event_payload(
         .fetch_optional(&mut *tx)
         .await?;
     if exists.is_some() {
-        return Ok(false);
+        return Ok(None);
     }
+
+    let previous: Option<(String,)> =
+        sqlx::query_as("SELECT status FROM issues WHERE project_id = ? AND fingerprint = ? FOR UPDATE")
+            .bind(project.id)
+            .bind(&ev.fingerprint)
+            .fetch_optional(&mut *tx)
+            .await?;
+    let trigger = match previous.as_ref().map(|(s,)| s.as_str()) {
+        None => Some(AlertTrigger::NewIssue),
+        Some("resolved") => Some(AlertTrigger::Regression),
+        Some(_) => None,
+    };
 
     let ts = naive(ev.timestamp);
     let title = trunc(&ev.title, 512);
@@ -156,11 +183,11 @@ pub async fn ingest_event_payload(
     match res {
         Ok(_) => {}
         // Course avec une réémission concurrente : on abandonne la transaction (issue incluse).
-        Err(sqlx::Error::Database(e)) if e.is_unique_violation() => return Ok(false),
+        Err(sqlx::Error::Database(e)) if e.is_unique_violation() => return Ok(None),
         Err(e) => return Err(e.into()),
     }
     tx.commit().await?;
-    Ok(true)
+    Ok(Some(trigger.map(|trigger| Alert { issue_id, trigger })))
 }
 
 async fn ingest_logs(pool: &MySqlPool, project: &Project, payload: &Value) -> Result<usize, IngestError> {

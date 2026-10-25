@@ -19,6 +19,7 @@ pub fn routes() -> Router<WebState> {
         .route("/projects/{project_id}/settings", get(show))
         .route("/projects/{project_id}/members", post(add_member))
         .route("/projects/{project_id}/members/{user_id}", delete(remove_member))
+        .route("/projects/{project_id}/notifications", post(set_notifications))
         .route("/projects/{project_id}/rotate-key", post(rotate_key))
         .route("/projects/{project_id}/rotate-upload-token", post(rotate_upload_token))
         .route("/projects/{project_id}/sourcemaps/{sourcemap_id}", delete(delete_sourcemap))
@@ -56,6 +57,7 @@ async fn page(
         .into_iter()
         .map(|m| json!({"id": m.id, "release": m.release, "name": m.name, "debug_id": m.debug_id, "size_bytes": m.size_bytes}))
         .collect::<Vec<_>>());
+    props["notifications"] = json!(projects::notifications_enabled(&state.pool, project.id, user.id).await?);
     props["errors"] = errors;
     render_page(state, req, Some(user), "Projects/Settings", props)
 }
@@ -140,5 +142,26 @@ async fn delete_sourcemap(
     sourcemaps::delete(&state.pool, &state.store, project_id, sourcemap_id)
         .await
         .map_err(|e| WebError::Internal(e.to_string()))?;
+    back_to_settings(&req, project_id)
+}
+
+#[derive(Deserialize)]
+struct NotificationsForm {
+    enabled: bool,
+}
+
+/// Préférence personnelle : chaque membre règle ses propres alertes.
+async fn set_notifications(
+    State(state): State<WebState>,
+    CurrentUser(user): CurrentUser,
+    Path(project_id): Path<u64>,
+    req: InertiaRequest,
+    Json(form): Json<NotificationsForm>,
+) -> Result<Response, WebError> {
+    project_access(&state, &user, project_id).await?;
+    if projects::notifications_enabled(&state.pool, project_id, user.id).await?.is_none() {
+        return Err(WebError::NotFound);
+    }
+    projects::set_notifications(&state.pool, project_id, user.id, form.enabled).await?;
     back_to_settings(&req, project_id)
 }

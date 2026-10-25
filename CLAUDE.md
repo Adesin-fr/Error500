@@ -44,13 +44,14 @@ Backend (`src/`) :
 - `ingest` : envelope → issues/events, logs, replays (segments rrweb décompressés : JSON, zlib, gzip ou deflate brut ; stockés dans le `BlobStore`).
 - `artifact_bundle` : lecture de l'archive zip de sentry-cli (`manifest.json`, source maps, `debug-id`).
 - `cli_upload` : protocole de `sentry-cli sourcemaps upload` (`/api/0/organizations/{org}/chunk-upload/`, `artifactbundle/assemble/`, releases). Le projet est celui du jeton d'upload ; le slug d'organisation est ignoré. Les chunks (`chunks/{projet}/{sha1}`) ne sont pas purgés.
+- `alerts` : alertes email (nouvelle issue, régression) envoyées aux membres dont `project_members.notify` est vrai. `Mailer` : SMTP (lettre), mémoire (tests) ou désactivé. L'envoi SMTP est asynchrone et n'échoue jamais l'ingestion. Un membre règle sa préférence dans Réglages.
 - `sourcemaps` : stockage par projet, association par `debug_id` ou release + chemin (`~/static/app.js.map`), résolution des frames.
 - `stacktrace` : vue exceptions/frames (le plus récent d'abord). Le nom d'une fonction vient du token de **l'appelant** (le nom d'une map à une position est celui de la fonction appelée).
 - `queries` : lectures pour l'UI (issues, événements, logs, replays, erreurs liées).
 - `storage` : `BlobStore` (disque local, S3 ou mémoire) via `object_store`.
 - `http` : API d'ingestion `/api/{id}/envelope/`, `/store/`, `/sourcemaps/` (Bearer), `/health` ; gzip/deflate, CORS, limite de taille.
 - `web` : pages Inertia (`inertia_rs`) : `auth`, `projects`, `issues`, `replays`, `logs`, `settings`, `admin`, assets embarqués. 404 (pas 403) sur un projet inaccessible.
-- `config` : variables d'environnement (`DATABASE_URL`, `BIND`, `PUBLIC_URL`, `MAX_BODY_MB`, `STORAGE`, `STORAGE_PATH`, `S3_*`, `VITE_DEV_URL`).
+- `config` : variables d'environnement (`DATABASE_URL`, `BIND`, `PUBLIC_URL`, `MAX_BODY_MB`, `STORAGE`, `STORAGE_PATH`, `S3_*`, `SMTP_URL`, `MAIL_FROM`, `VITE_DEV_URL`).
 - `lib.rs::app` : routeur unique (ingestion + web). Migrations SQL dans `migrations/` (appliquées au démarrage).
 
 Frontend (`frontend/`, Vue 3 + TypeScript + Vite, `<script setup>`) :
@@ -90,4 +91,4 @@ Ou avec `curl` : `POST /api/{id}/sourcemaps/?release=1.0.0&name=~%2Fstatic%2Fapp
 
 ## Reste à faire
 
-Test réel contre un S3 (seul le local et la construction S3 sont testés) ; `sentry-cli` : seul l'upload par archive (`artifact_bundles`) est géré, pas les anciens `releases files` ni les fichiers de debug ; replays mobiles (`replay_video`) ; alertes/notifications ; suppression de projets ; rétention des données.
+Test réel contre un S3 (seul le local et la construction S3 sont testés) ; `sentry-cli` : seul l'upload par archive (`artifact_bundles`) est géré, pas les anciens `releases files` ni les fichiers de debug ; replays mobiles (`replay_video`) ; alertes autres que l'email (webhooks, seuils de fréquence) ; suppression de projets ; rétention des données.

@@ -130,6 +130,7 @@ export interface Member {
   name: string
   email: string
   role: 'owner' | 'member'
+  notify: boolean
 }
 
 export interface SourceMapEntry {

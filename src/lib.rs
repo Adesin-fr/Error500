@@ -5,6 +5,7 @@ pub mod projects;
 pub mod event;
 pub mod storage;
 pub mod ingest;
+pub mod alerts;
 pub mod http;
 pub mod config;
 pub mod sourcemaps;
@@ -17,8 +18,14 @@ pub mod web;
 use axum::Router;
 
 /// Application complète : API d'ingestion Sentry et interface web, dans un seul routeur.
-pub fn app(pool: sqlx::MySqlPool, store: storage::BlobStore, config: &config::Config) -> Router {
-    let ingest = http::router(http::AppState { pool: pool.clone(), store: store.clone(), max_body: config.max_body });
+pub fn app(pool: sqlx::MySqlPool, store: storage::BlobStore, mailer: alerts::Mailer, config: &config::Config) -> Router {
+    let ingest = http::router(http::AppState {
+        pool: pool.clone(),
+        store: store.clone(),
+        max_body: config.max_body,
+        mailer,
+        public_url: config.public_url.clone(),
+    });
     let web = web::router(web::WebState {
         pool,
         store,

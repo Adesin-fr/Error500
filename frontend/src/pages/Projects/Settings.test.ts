@@ -19,6 +19,7 @@ const props = (over: Record<string, unknown> = {}) => ({
   upload_token: 'tok123',
   members: [{ user_id: 1, name: 'Alice', email: 'alice@example.com', role: 'owner' }, { user_id: 2, name: 'Bob', email: 'bob@example.com', role: 'member' }],
   sourcemaps: [{ id: 9, release: '1.0', name: '~/static/app.min.js.map', debug_id: null, size_bytes: 1536 }],
+  notifications: true,
   errors: {},
   ...over,
 })
@@ -35,6 +36,25 @@ describe('Projects/Settings', () => {
     expect(w.find('pre.snippet').text()).toContain('https://err.example.com/api/5/sourcemaps/')
     expect(w.text()).toContain('~/static/app.min.js.map')
     expect(w.text()).toContain('1.5 KB')
+  })
+
+  it('shows the email alert preference and turns it off', async () => {
+    const w = mount(Settings, { props: props() as never })
+    const box = w.find('input.notifications')
+    expect((box.element as HTMLInputElement).checked).toBe(true)
+    await box.setValue(false)
+    expect(router.post).toHaveBeenCalledWith('/projects/5/notifications', { enabled: false }, expect.anything())
+  })
+
+  it('turns the alerts back on', async () => {
+    const w = mount(Settings, { props: props({ notifications: false }) as never })
+    await w.find('input.notifications').setValue(true)
+    expect(router.post).toHaveBeenCalledWith('/projects/5/notifications', { enabled: true }, expect.anything())
+  })
+
+  it('hides the preference for someone who is not a member', () => {
+    const w = mount(Settings, { props: props({ notifications: null }) as never })
+    expect(w.find('input.notifications').exists()).toBe(false)
   })
 
   it('adds a member by email', async () => {

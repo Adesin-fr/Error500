@@ -24,6 +24,9 @@ pub struct AppState {
     pub store: BlobStore,
     /// Taille maximale d'un corps de requête, après décompression.
     pub max_body: usize,
+    pub mailer: crate::alerts::Mailer,
+    /// URL publique de l'application, pour les liens des emails d'alerte.
+    pub public_url: String,
 }
 
 pub fn router(state: AppState) -> Router {
@@ -127,6 +130,15 @@ async fn authorize(pool: &MySqlPool, project_id: u64, key: Option<String>) -> Re
         .ok_or_else(|| ApiError::new(StatusCode::FORBIDDEN, "clé ou projet invalide"))
 }
 
+/// Une alerte qui échoue ne doit jamais faire échouer l'ingestion de l'événement.
+async fn send_alerts(state: &AppState, project: &Project, alerts: &[ingest::Alert]) {
+    for alert in alerts {
+        if let Err(e) = crate::alerts::notify(&state.pool, &state.mailer, &state.public_url, project, alert).await {
+            tracing::warn!("alerte non envoyée : {e}");
+        }
+    }
+}
+
 async fn envelope(
     State(state): State<AppState>,
     Path(project_id): Path<u64>,
@@ -139,7 +151,8 @@ async fn envelope(
     let key = request_key(&headers, query.as_deref()).or_else(|| envelope.dsn.as_deref().and_then(key_from_dsn));
     let project = authorize(&state.pool, project_id, key).await?;
 
-    ingest::ingest_envelope(&state.pool, &state.store, &project, &envelope).await?;
+    let summary = ingest::ingest_envelope(&state.pool, &state.store, &project, &envelope).await?;
+    send_alerts(&state, &project, &summary.alerts).await;
     Ok(Json(json!({ "id": envelope.event_id.unwrap_or_default() })))
 }
 
@@ -165,7 +178,9 @@ async fn store(
             id
         }
     };
-    ingest::ingest_event_payload(&state.pool, &project, &payload).await?;
+    let stored = ingest::ingest_event_payload(&state.pool, &project, &payload).await?;
+    let alerts: Vec<ingest::Alert> = stored.flatten().into_iter().collect();
+    send_alerts(&state, &project, &alerts).await;
     Ok(Json(json!({ "id": id })))
 }
 

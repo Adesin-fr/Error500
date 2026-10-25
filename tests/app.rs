@@ -15,7 +15,7 @@ async fn one_router_serves_ingestion_and_the_web_ui() {
         _ => None,
     })
     .unwrap();
-    let app = error500::app(db.pool.clone(), BlobStore::memory(), &config);
+    let app = error500::app(db.pool.clone(), BlobStore::memory(), error500::alerts::Mailer::disabled(), &config);
 
     let get = |uri: &str| Request::get(uri).body(Body::empty()).unwrap();
     assert_eq!(app.clone().oneshot(get("/health")).await.unwrap().status(), StatusCode::OK);

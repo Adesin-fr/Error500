@@ -3,7 +3,7 @@ mod common;
 use bytes::Bytes;
 use common::TestDb;
 use error500::envelope::Envelope;
-use error500::ingest::{self, IngestSummary};
+use error500::ingest::{self, Alert, AlertTrigger, IngestSummary};
 use error500::projects::{self, Project};
 use error500::storage::BlobStore;
 use error500::users;
@@ -55,7 +55,7 @@ async fn error_event_creates_issue_and_event() {
     let (db, store, p) = setup().await;
     let env = envelope(json!({"event_id": EVENT_ID}), &[("event", &error_event(EVENT_ID, "x is undefined", "pay"))]);
     let s = ingest::ingest_envelope(&db.pool, &store, &p, &env).await.unwrap();
-    assert_eq!(s, IngestSummary { events: 1, ..Default::default() });
+    assert_eq!(s.events, 1);
 
     let (title, n): (String, u64) = sqlx::query_as("SELECT title, event_count FROM issues").fetch_one(&db.pool).await.unwrap();
     assert_eq!(title, "TypeError: x is undefined");
@@ -223,7 +223,7 @@ async fn store_endpoint_payload_is_ingested_like_an_event() {
     let (db, _store, p) = setup().await;
     let payload: serde_json::Value = serde_json::from_slice(&error_event(EVENT_ID, "m", "pay")).unwrap();
     let s = ingest::ingest_event_payload(&db.pool, &p, &payload).await.unwrap();
-    assert!(s);
+    assert!(s.is_some());
     assert_eq!(count(&db, "events").await, 1);
     db.cleanup().await;
 }
@@ -304,5 +304,49 @@ async fn replay_event_metadata_is_extracted() {
     assert_eq!(os, "macOS 14");
     assert_eq!(ty, "session");
     assert!(errs.contains("e1") && errs.contains("e2"));
+    db.cleanup().await;
+}
+
+// --- Déclencheurs d'alertes ---
+
+async fn ingest_error(db: &TestDb, store: &BlobStore, p: &Project, event_id: &str, msg: &str) -> IngestSummary {
+    let env = envelope(json!({"event_id": event_id}), &[("event", &error_event(event_id, msg, "pay"))]);
+    ingest::ingest_envelope(&db.pool, store, p, &env).await.unwrap()
+}
+
+async fn issue_id(db: &TestDb) -> u64 {
+    sqlx::query_scalar("SELECT id FROM issues").fetch_one(&db.pool).await.unwrap()
+}
+
+#[tokio::test]
+async fn first_occurrence_triggers_a_new_issue_alert_then_nothing() {
+    let (db, store, p) = setup().await;
+    let s = ingest_error(&db, &store, &p, EVENT_ID, "boom").await;
+    assert_eq!(s.alerts, vec![Alert { issue_id: issue_id(&db).await, trigger: AlertTrigger::NewIssue }]);
+    let s = ingest_error(&db, &store, &p, "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb", "boom").await;
+    assert_eq!(s.events, 1);
+    assert!(s.alerts.is_empty());
+    db.cleanup().await;
+}
+
+#[tokio::test]
+async fn occurrence_of_a_resolved_issue_triggers_a_regression_alert() {
+    let (db, store, p) = setup().await;
+    ingest_error(&db, &store, &p, EVENT_ID, "boom").await;
+    sqlx::query("UPDATE issues SET status = 'resolved'").execute(&db.pool).await.unwrap();
+    let s = ingest_error(&db, &store, &p, "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb", "boom").await;
+    assert_eq!(s.alerts, vec![Alert { issue_id: issue_id(&db).await, trigger: AlertTrigger::Regression }]);
+    db.cleanup().await;
+}
+
+#[tokio::test]
+async fn ignored_issue_and_duplicate_events_trigger_nothing() {
+    let (db, store, p) = setup().await;
+    ingest_error(&db, &store, &p, EVENT_ID, "boom").await;
+    sqlx::query("UPDATE issues SET status = 'ignored'").execute(&db.pool).await.unwrap();
+    let s = ingest_error(&db, &store, &p, "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb", "boom").await;
+    assert!(s.alerts.is_empty());
+    let s = ingest_error(&db, &store, &p, "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb", "boom").await;
+    assert_eq!(s, IngestSummary::default());
     db.cleanup().await;
 }

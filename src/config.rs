@@ -12,6 +12,9 @@ pub struct Config {
     pub storage: StorageConfig,
     /// Serveur de développement Vite (`VITE_DEV_URL`) ; absent en production.
     pub vite_dev_url: Option<String>,
+    /// Serveur SMTP des alertes (`SMTP_URL`, ex. `smtps://user:pass@host`) ; sans lui, pas d'email.
+    pub smtp_url: Option<String>,
+    pub mail_from: String,
 }
 
 impl Config {
@@ -32,7 +35,17 @@ impl Config {
             max_body: max_body_mb * 1024 * 1024,
             storage: StorageConfig::from_vars(&var)?,
             vite_dev_url: var("VITE_DEV_URL"),
+            smtp_url: var("SMTP_URL").filter(|v| !v.is_empty()),
+            mail_from: var("MAIL_FROM").unwrap_or_else(|| "error500@localhost".into()),
         })
+    }
+
+    /// Transport d'alertes : SMTP si configuré, sinon désactivé.
+    pub fn mailer(&self) -> anyhow::Result<crate::alerts::Mailer> {
+        match &self.smtp_url {
+            Some(url) => crate::alerts::Mailer::smtp(url, &self.mail_from),
+            None => Ok(crate::alerts::Mailer::disabled()),
+        }
     }
 
     pub fn secure_cookies(&self) -> bool {
@@ -61,6 +74,21 @@ mod tests {
         assert_eq!(c.public_url, "http://localhost:8080");
         assert_eq!(c.max_body, 20 * 1024 * 1024);
         assert_eq!(c.storage, StorageConfig::Local { path: "./data/blobs".into() });
+    }
+
+    #[test]
+    fn smtp_is_optional_and_from_has_a_default() {
+        let c = Config::from_vars(vars(&[("DATABASE_URL", "mysql://x")])).unwrap();
+        assert_eq!(c.smtp_url, None);
+        assert_eq!(c.mail_from, "error500@localhost");
+        let c = Config::from_vars(vars(&[
+            ("DATABASE_URL", "mysql://x"),
+            ("SMTP_URL", "smtps://u:p@smtp.example.com"),
+            ("MAIL_FROM", "Error500 <errors@example.com>"),
+        ]))
+        .unwrap();
+        assert_eq!(c.smtp_url.as_deref(), Some("smtps://u:p@smtp.example.com"));
+        assert_eq!(c.mail_from, "Error500 <errors@example.com>");
     }
 
     #[test]

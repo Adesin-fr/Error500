@@ -25,7 +25,7 @@ async fn main() -> anyhow::Result<()> {
     match args.iter().map(String::as_str).collect::<Vec<_>>().as_slice() {
         [] | ["serve"] => {
             let store = BlobStore::from_config(&config.storage)?;
-            let app = error500::app(pool, store, &config);
+            let app = error500::app(pool, store, config.mailer()?, &config);
             let listener = tokio::net::TcpListener::bind(&config.bind).await?;
             tracing::info!("écoute sur {}", config.bind);
             axum::serve(listener, app).await?;
