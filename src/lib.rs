@@ -1,6 +1,8 @@
 pub mod envelope;
 pub mod auth;
 pub mod users;
+pub mod totp;
+pub mod secretbox;
 pub mod projects;
 pub mod event;
 pub mod storage;
@@ -36,6 +38,7 @@ pub fn app(pool: sqlx::MySqlPool, store: storage::BlobStore, mailer: alerts::Mai
         dev_url: config.vite_dev_url.clone(),
         secure_cookies: config.secure_cookies(),
         live_poll: std::time::Duration::from_secs(1),
+        secret_key: config.secret_key.clone(),
     });
     ingest.merge(web)
 }

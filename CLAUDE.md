@@ -39,6 +39,7 @@ Backend (`src/`) :
 - `envelope` : parseur du format d'enveloppe Sentry.
 - `auth` : extraction de la clé publique (`X-Sentry-Auth`, `?sentry_key=`, DSN de l'enveloppe), construction du DSN.
 - `users` : utilisateurs (argon2), sessions (jeton hashé SHA-256). Le premier utilisateur créé est admin.
+- `totp` : mots de passe à usage unique (RFC 6238, SHA-1, 6 chiffres, 30 s, fenêtre ±1 période), `otpauth://` et QR en SVG rendu côté serveur. 2FA dans `users` : secret chiffré (AES-256-GCM, module `secretbox`, clé `SECRET_KEY` = 64 hex, facultative : sans elle la 2FA est indisponible et la connexion d'un compte 2FA échoue) dans `users.totp_secret` (à confirmer par un code avant `totp_enabled`), `totp_last_step` interdit le rejeu d'un code, 8 codes de secours à usage unique (hashés SHA-256, affichés une seule fois). Connexion en deux temps : le mot de passe valide crée un défi (`login_challenges`, 5 min, 5 essais, jeton hashé) et rend `Auth/TwoFactor` ; `POST /login/two-factor` ouvre la session. Page `/account` (`web::account`) : activer (QR), désactiver (mot de passe requis). Déblocage : `error500 disable-2fa <email>`.
 - `projects` : projets, membres (`owner`/`member`), clé publique, jeton d'upload, rotation. Un admin voit tous les projets.
 - `event` : normalisation d'un événement, empreinte de regroupement en issues, contexte d'affichage (liste blanche de champs).
 - `ingest` : envelope → issues/events, logs, replays (segments rrweb décompressés : JSON, zlib, gzip ou deflate brut ; stockés dans le `BlobStore`).
@@ -56,7 +57,7 @@ Backend (`src/`) :
 - `storage` : `BlobStore` (disque local, S3 ou mémoire) via `object_store`.
 - `http` : API d'ingestion `/api/{id}/envelope/`, `/store/`, `/sourcemaps/` (Bearer), `/health` ; gzip/deflate, CORS, limite de taille.
 - `web` : pages Inertia (`inertia_rs`) : `auth`, `projects`, `issues`, `replays`, `logs`, `settings`, `admin`, assets embarqués. 404 (pas 403) sur un projet inaccessible.
-- `config` : variables d'environnement, complétées par un fichier `.env` du répertoire courant (ou `ENV_FILE`) ; l'environnement réel prime. `.env` est ignoré par git, `.env.example` (versionné) liste toutes les options. Variables : (`DATABASE_URL`, `BIND`, `PUBLIC_URL`, `MAX_BODY_MB`, `STORAGE`, `STORAGE_PATH`, `S3_*`, `SMTP_URL`, `MAIL_FROM`, `ALERT_MAX_PER_HOUR`, `RUST_LOG`, `VITE_DEV_URL`).
+- `config` : variables d'environnement, complétées par un fichier `.env` du répertoire courant (ou `ENV_FILE`) ; l'environnement réel prime. `.env` est ignoré par git, `.env.example` (versionné) liste toutes les options. Variables : (`DATABASE_URL`, `BIND`, `PUBLIC_URL`, `MAX_BODY_MB`, `STORAGE`, `STORAGE_PATH`, `S3_*`, `SMTP_URL`, `MAIL_FROM`, `ALERT_MAX_PER_HOUR`, `SECRET_KEY`, `RUST_LOG`, `VITE_DEV_URL`).
 - `lib.rs::app` : routeur unique (ingestion + web). Migrations SQL dans `migrations/` (appliquées au démarrage).
 
 Frontend (`frontend/`, Vue 3 + TypeScript + Vite, `<script setup>`) :

@@ -2,7 +2,8 @@
 
 use super::cookies::{clear_cookie, read, session_cookie, SESSION_COOKIE};
 use super::{redirect, render_page, MaybeUser, WebError, WebState};
-use crate::users::{self, UserError};
+use super::account::unix_now;
+use crate::users::{self, ChallengeOutcome, UserError};
 use axum::extract::State;
 use axum::http::header;
 use axum::response::Response;
@@ -17,6 +18,7 @@ const SESSION_SECS: u64 = 30 * 24 * 3600;
 pub fn routes() -> Router<WebState> {
     Router::new()
         .route("/login", get(login_page).post(login))
+        .route("/login/two-factor", post(two_factor))
         .route("/logout", post(logout))
         .route("/setup", get(setup_page).post(setup))
 }
@@ -54,6 +56,19 @@ async fn login(
     Json(form): Json<LoginForm>,
 ) -> Result<Response, WebError> {
     match users::authenticate(&state.pool, &form.email, &form.password).await? {
+        Some(user) if users::two_factor_enabled(&state.pool, user.id).await? => {
+            if state.secret_key.is_none() {
+                return render_page(
+                    &state,
+                    &req,
+                    None,
+                    "Auth/Login",
+                    json!({ "errors": { "email": "Double authentification indisponible : SECRET_KEY n’est pas configurée." } }),
+                );
+            }
+            let challenge = users::create_login_challenge(&state.pool, user.id).await?;
+            render_page(&state, &req, None, "Auth/TwoFactor", json!({ "challenge": challenge, "errors": {} }))
+        }
         Some(user) => {
             let token = users::create_session(&state.pool, user.id).await?;
             redirect(&req, "/projects", Some(session_cookie(&token, SESSION_SECS, state.secure_cookies)))
@@ -64,6 +79,43 @@ async fn login(
             None,
             "Auth/Login",
             json!({ "errors": { "email": "Adresse e-mail ou mot de passe incorrect." } }),
+        ),
+    }
+}
+
+#[derive(Deserialize)]
+struct TwoFactorForm {
+    challenge: String,
+    code: String,
+}
+
+/// Seconde étape de la connexion : code de l'application ou code de secours.
+async fn two_factor(
+    State(state): State<WebState>,
+    req: InertiaRequest,
+    Json(form): Json<TwoFactorForm>,
+) -> Result<Response, WebError> {
+    let Some(key) = &state.secret_key else {
+        return render_page(&state, &req, None, "Auth/Login", json!({ "errors": { "email": "SECRET_KEY n’est pas configurée." } }));
+    };
+    match users::answer_login_challenge(&state.pool, key, &form.challenge, &form.code, unix_now()).await? {
+        ChallengeOutcome::Passed(user) => {
+            let token = users::create_session(&state.pool, user.id).await?;
+            redirect(&req, "/projects", Some(session_cookie(&token, SESSION_SECS, state.secure_cookies)))
+        }
+        ChallengeOutcome::Wrong => render_page(
+            &state,
+            &req,
+            None,
+            "Auth/TwoFactor",
+            json!({ "challenge": form.challenge, "errors": { "code": "Code incorrect." } }),
+        ),
+        ChallengeOutcome::Invalid => render_page(
+            &state,
+            &req,
+            None,
+            "Auth/Login",
+            json!({ "errors": { "email": "Connexion expirée, recommencez." } }),
         ),
     }
 }

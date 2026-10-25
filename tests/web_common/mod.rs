@@ -5,6 +5,7 @@ use super::common::TestDb;
 use axum::body::Body;
 use axum::http::{header, HeaderMap, Method, Request, StatusCode};
 use axum::Router;
+use error500::secretbox::SecretKey;
 use error500::storage::BlobStore;
 use error500::web::assets::Assets;
 use error500::web::{router, WebState};
@@ -20,11 +21,10 @@ pub struct W {
     pub version: String,
 }
 
-pub async fn web_app_with(assets: Assets) -> W {
-    let db = TestDb::new().await;
-    let store = BlobStore::memory();
-    let version = assets.version.clone();
-    let router = router(WebState {
+const TEST_KEY: &str = "00112233445566778899aabbccddeeff00112233445566778899aabbccddeeff";
+
+fn test_router(db: &TestDb, store: &BlobStore, assets: Assets, key: Option<SecretKey>) -> Router {
+    router(WebState {
         pool: db.pool.clone(),
         store: store.clone(),
         public_url: "https://err.example.com".into(),
@@ -32,12 +32,28 @@ pub async fn web_app_with(assets: Assets) -> W {
         dev_url: None,
         secure_cookies: false,
         live_poll: std::time::Duration::from_millis(50),
-    });
-    W { db, store, router, version }
+        secret_key: key,
+    })
+}
+
+pub async fn web_app_with(assets: Assets) -> W {
+    web_app_full(assets, Some(SecretKey::from_hex(TEST_KEY).unwrap())).await
 }
 
 pub async fn web_app() -> W {
     web_app_with(Assets::empty()).await
+}
+
+pub async fn web_app_with_key(key: Option<SecretKey>) -> W {
+    web_app_full(Assets::empty(), key).await
+}
+
+async fn web_app_full(assets: Assets, key: Option<SecretKey>) -> W {
+    let db = TestDb::new().await;
+    let store = BlobStore::memory();
+    let version = assets.version.clone();
+    let router = test_router(&db, &store, assets, key);
+    W { db, store, router, version }
 }
 
 pub struct Resp {
@@ -73,6 +89,11 @@ impl Resp {
 }
 
 impl W {
+    /// Relance l'application (même base) avec une autre clé de chiffrement.
+    pub fn swap_key(&mut self, key: Option<SecretKey>) {
+        self.router = test_router(&self.db, &self.store, Assets::empty(), key);
+    }
+
     pub async fn send(&self, req: Request<Body>) -> Resp {
         let resp = self.router.clone().oneshot(req).await.unwrap();
         let status = resp.status();

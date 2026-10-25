@@ -8,7 +8,8 @@ use sqlx::mysql::MySqlPoolOptions;
 const USAGE: &str = "usage:
   error500 [serve]
   error500 create-user <email> <nom> <mot-de-passe>
-  error500 create-project <email-propriétaire> <nom>";
+  error500 create-project <email-propriétaire> <nom>
+  error500 disable-2fa <email>";
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
@@ -44,6 +45,11 @@ async fn main() -> anyhow::Result<()> {
                 .with_context(|| format!("utilisateur introuvable : {owner_email}"))?;
             let p = projects::create_project(&pool, owner.0, name).await?;
             println!("projet {} (id {})\nDSN : {}", p.name, p.id, build_dsn(&config.public_url, &p.public_key, p.id));
+        }
+        ["disable-2fa", email] => {
+            let u = users::find_by_email(&pool, email).await?.with_context(|| format!("utilisateur introuvable : {email}"))?;
+            users::disable_two_factor(&pool, u.id).await?;
+            println!("authentification à deux facteurs désactivée pour {}", u.email);
         }
         _ => bail!("{USAGE}"),
     }

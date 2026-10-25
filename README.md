@@ -45,6 +45,7 @@ Elles se passent à l'environnement du conteneur, ou dans un fichier `.env` (voi
 | `SMTP_URL` | — | Active les alertes e-mail : `smtps://utilisateur:motdepasse@smtp.example.com` (ou `smtp://hote:587?tls=required`) |
 | `MAIL_FROM` | `error500@localhost` | Expéditeur des alertes |
 | `ALERT_MAX_PER_HOUR` | `10` | Alertes e-mail maximum par projet et par heure (`0` = illimité) |
+| `SECRET_KEY` | — | Clé AES-256 (64 caractères hex, `openssl rand -hex 32`) qui chiffre les secrets 2FA. Sans elle, la double authentification est indisponible. À conserver : la perdre rend les secrets illisibles (`error500 disable-2fa <email>` débloque un compte) |
 | `RUST_LOG` | `info` | Niveau des journaux (`error`, `warn`, `info`, `debug`) |
 | `ENV_FILE` | `.env` | Chemin d'un autre fichier de variables |
 

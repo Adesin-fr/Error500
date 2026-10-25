@@ -21,7 +21,7 @@ function logout() {
       <Link href="/projects" class="nav-link">Projets</Link>
       <Link v-if="user?.is_admin" href="/admin/users" class="nav-link">Utilisateurs</Link>
       <span class="spacer"></span>
-      <span v-if="user" class="muted">{{ user.name }}</span>
+      <Link v-if="user" href="/account" class="nav-link">{{ user.name }}</Link>
       <button v-if="user" type="button" class="btn" @click="logout">Déconnexion</button>
     </header>
     <main class="content">

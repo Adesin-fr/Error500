@@ -165,3 +165,14 @@ export interface ManagedUser {
 }
 
 export type FormErrors = Partial<Record<string, string>>
+
+export interface TwoFactorState {
+  /** Faux quand le serveur n'a pas de SECRET_KEY. */
+  available: boolean
+  enabled: boolean
+  recovery_remaining: number
+  /** Présents tant que la configuration n'est pas confirmée. */
+  secret?: string
+  otpauth_uri?: string
+  qr_svg?: string
+}

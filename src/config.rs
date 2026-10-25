@@ -21,6 +21,8 @@ pub struct Config {
     pub log_filter: String,
     /// Alertes email maximum par projet et par heure (`ALERT_MAX_PER_HOUR`, 0 = illimité).
     pub alert_limit: u32,
+    /// Clé de chiffrement des secrets stockés (`SECRET_KEY`, 64 caractères hexadécimaux) ; sans elle, la 2FA est indisponible.
+    pub secret_key: Option<crate::secretbox::SecretKey>,
 }
 
 /// Variables d'un fichier `.env` (`CLE=valeur`, commentaires `#`, guillemets optionnels).
@@ -69,6 +71,10 @@ impl Config {
                 Some(v) => v.parse().map_err(|_| anyhow::anyhow!("ALERT_MAX_PER_HOUR invalide : {v}"))?,
                 None => 10,
             },
+            secret_key: match var("SECRET_KEY").filter(|v| !v.trim().is_empty()) {
+                Some(v) => Some(crate::secretbox::SecretKey::from_hex(&v).map_err(|e| anyhow::anyhow!("SECRET_KEY invalide : {e}"))?),
+                None => None,
+            },
             mail_from: var("MAIL_FROM").unwrap_or_else(|| "error500@localhost".into()),
         })
     }
@@ -110,6 +116,19 @@ mod tests {
         assert_eq!(c.log_filter, "info");
         let c = Config::from_vars(vars(&[("DATABASE_URL", "mysql://x"), ("RUST_LOG", "error500=debug,warn")])).unwrap();
         assert_eq!(c.log_filter, "error500=debug,warn");
+    }
+
+    #[test]
+    fn secret_key_is_optional_but_must_be_valid() {
+        let c = Config::from_vars(vars(&[("DATABASE_URL", "mysql://x")])).unwrap();
+        assert!(c.secret_key.is_none());
+        let c = Config::from_vars(vars(&[
+            ("DATABASE_URL", "mysql://x"),
+            ("SECRET_KEY", "00112233445566778899aabbccddeeff00112233445566778899aabbccddeeff"),
+        ]))
+        .unwrap();
+        assert!(c.secret_key.is_some());
+        assert!(Config::from_vars(vars(&[("DATABASE_URL", "mysql://x"), ("SECRET_KEY", "trop-court")])).is_err());
     }
 
     #[test]

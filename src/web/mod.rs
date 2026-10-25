@@ -1,6 +1,7 @@
 //! Interface web : pages Inertia (Vue) servies par le même binaire que l'ingestion.
 
 pub mod assets;
+pub mod account;
 pub mod admin;
 pub mod auth;
 pub mod cookies;
@@ -38,6 +39,8 @@ pub struct WebState {
     pub secure_cookies: bool,
     /// Intervalle d'interrogation de la base par le flux live des replays.
     pub live_poll: std::time::Duration,
+    /// Clé de chiffrement des secrets (`SECRET_KEY`) ; sans elle, la 2FA est indisponible.
+    pub secret_key: Option<crate::secretbox::SecretKey>,
 }
 
 pub fn router(state: WebState) -> Router {
@@ -46,6 +49,7 @@ pub fn router(state: WebState) -> Router {
         .route("/", get(|_: CurrentUser| async { Redirect::to("/projects") }))
         .route("/assets/{*path}", get(asset))
         .merge(auth::routes())
+        .merge(account::routes())
         .merge(projects::routes())
         .merge(issues::routes())
         .merge(replays::routes())
