@@ -1,0 +1,58 @@
+# Exemple de déploiement d'error500 : l'application + sa base MariaDB.
+#
+#   1. Copier ce fichier, puis adapter PUBLIC_URL (adresse par laquelle les navigateurs et les SDK
+#      joignent error500) et changer le mot de passe de la base.
+#   2. docker compose up -d
+#   3. Ouvrir PUBLIC_URL : la page /setup crée le premier compte, qui est administrateur.
+#
+# Les variables ${...} peuvent être définies dans un fichier `.env` placé à côté de ce fichier.
+# Toutes les options d'error500 sont décrites dans le README.
+
+services:
+  error500:
+    image: ${ERROR500_IMAGE:-ghcr.io/adesin-fr/error500:latest}
+    # Pour construire l'image depuis le dépôt plutôt que de la télécharger :
+    # build: .
+    restart: unless-stopped
+    depends_on:
+      db:
+        condition: service_healthy
+    ports:
+      - "${ERROR500_PORT:-8080}:8080"
+    environment:
+      DATABASE_URL: mysql://error500:${DB_PASSWORD:-change-me}@db:3306/error500
+      # Adresse publique, sans barre finale. En https, les cookies de session passent en « Secure ».
+      PUBLIC_URL: ${PUBLIC_URL:-http://localhost:8080}
+      # Alertes par e-mail (nouvelle issue, régression) : décommenter et renseigner.
+      # SMTP_URL: smtps://utilisateur:motdepasse@smtp.example.com
+      # MAIL_FROM: Error500 <errors@example.com>
+      # Stockage S3 des replays et source maps (par défaut : disque, volume `data`).
+      # STORAGE: s3
+      # S3_BUCKET: error500
+      # S3_REGION: eu-west-3
+      # S3_ENDPOINT: http://minio:9000
+      # S3_ACCESS_KEY: ...
+      # S3_SECRET_KEY: ...
+    volumes:
+      # Replays rrweb et source maps (inutile avec STORAGE=s3).
+      - data:/data
+
+  db:
+    image: mariadb:11.8
+    restart: unless-stopped
+    environment:
+      MARIADB_DATABASE: error500
+      MARIADB_USER: error500
+      MARIADB_PASSWORD: ${DB_PASSWORD:-change-me}
+      MARIADB_RANDOM_ROOT_PASSWORD: "1"
+    volumes:
+      - db:/var/lib/mysql
+    healthcheck:
+      test: ["CMD", "healthcheck.sh", "--connect", "--innodb_initialized"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+
+volumes:
+  data:
+  db:

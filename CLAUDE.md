@@ -67,6 +67,13 @@ Frontend (`frontend/`, Vue 3 + TypeScript + Vite, `<script setup>`) :
 - Tests : Vitest + Vue Test Utils (`npm test`), tests boîte noire ; `src/test/inertiaMock.ts` remplace `@inertiajs/vue3`.
 - Le build (`frontend/dist`) est embarqué dans le binaire (rust-embed) ; `build.rs` relance la compilation quand il change.
 
+## Image Docker et publication
+
+- `Dockerfile` : trois étages (frontend Vite → backend Rust, dépendances en couche à part → `debian:bookworm-slim`, utilisateur non-root, `/data` en volume). Le frontend est embarqué dans le binaire : rien d'autre à copier.
+- `.github/workflows/docker.yml` : sur **chaque tag** du dépôt, tests (frontend + `cargo test` sur MariaDB 11.8), puis image `linux/amd64` et `linux/arm64` (runners natifs), publiée sur `ghcr.io/<propriétaire>/<dépôt>` (tag du dépôt, `1.2.3`/`1.2` pour un tag semver, `latest` pour une version stable).
+- **Visibilité :** GitHub ne permet pas de rendre un paquet public par l'API. Au premier tag, le paquet est privé : une seule fois, Paramètres du paquet → Change visibility → Public. Le workflow signale (avertissement) quand l'image n'est pas publique.
+- `docker-compose.yml` : exemple application + MariaDB. `README.md` : déploiement et variables d'environnement.
+
 ## Lancer
 
 ```

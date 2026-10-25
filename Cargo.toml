@@ -37,3 +37,6 @@ zip = { version = "9.1.0", default-features = false, features = ["deflate"] }
 http-body-util = "0.1.5"
 tempfile = "3.27.0"
 tower = "0.5.3"
+
+[profile.release]
+strip = true
