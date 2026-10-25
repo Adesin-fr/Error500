@@ -107,9 +107,35 @@ pub async fn ingest_envelope(
     Ok(summary)
 }
 
-/// Stocke un événement d'erreur (aussi utilisé par l'endpoint historique `/store/`).
+/// Interblocage (1213), délai de verrou (1205) ou conflit de snapshot (1020) : la transaction peut
+/// être rejouée telle quelle.
+fn is_retryable(e: &IngestError) -> bool {
+    let IngestError::Db(sqlx::Error::Database(d)) = e else { return false };
+    d.try_downcast_ref::<sqlx::mysql::MySqlDatabaseError>().is_some_and(|m| matches!(m.number(), 1213 | 1205 | 1020))
+}
+
+/// Stocke un événement d'erreur (aussi utilisé par l'endpoint historique `/store/`), en rejouant la
+/// transaction si MariaDB la choisit comme victime d'un interblocage.
 /// Renvoie `None` si l'événement existait déjà (réémission du SDK), sinon l'éventuelle alerte à envoyer.
 pub async fn ingest_event_payload(
+    pool: &MySqlPool,
+    project: &Project,
+    payload: &Value,
+) -> Result<Option<Option<Alert>>, IngestError> {
+    let mut attempt = 1;
+    loop {
+        match store_event(pool, project, payload).await {
+            Err(e) if attempt < 5 && is_retryable(&e) => {
+                tracing::debug!("transaction d'ingestion rejouée (tentative {attempt}) : {e}");
+                attempt += 1;
+                tokio::time::sleep(std::time::Duration::from_millis(10 * attempt as u64)).await;
+            }
+            other => return other,
+        }
+    }
+}
+
+async fn store_event(
     pool: &MySqlPool,
     project: &Project,
     payload: &Value,
@@ -117,37 +143,24 @@ pub async fn ingest_event_payload(
     let ev: NormalizedEvent = normalize(payload);
     let mut tx = pool.begin().await?;
 
-    let exists: Option<(u64,)> = sqlx::query_as("SELECT id FROM events WHERE project_id = ? AND event_id = ?")
-        .bind(project.id)
-        .bind(&ev.event_id)
-        .fetch_optional(&mut *tx)
-        .await?;
-    if exists.is_some() {
-        return Ok(None);
-    }
-
-    let previous: Option<(String,)> =
-        sqlx::query_as("SELECT status FROM issues WHERE project_id = ? AND fingerprint = ? FOR UPDATE")
-            .bind(project.id)
-            .bind(&ev.fingerprint)
-            .fetch_optional(&mut *tx)
-            .await?;
-    let trigger = match previous.as_ref().map(|(s,)| s.as_str()) {
-        None => Some(AlertTrigger::NewIssue),
-        Some("resolved") => Some(AlertTrigger::Regression),
-        Some(_) => None,
-    };
+    // Pas de lecture préalable (doublon d'event_id) : elle ouvrirait un snapshot avant l'upsert, et
+    // MariaDB >= 11.6 (innodb_snapshot_isolation) refuserait alors de modifier une issue changée
+    // entretemps (erreur 1020). Un doublon est détecté par la contrainte unique de `events`.
+    // Pas de SELECT ... FOR UPDATE préalable : sur une issue absente il poserait un verrou de plage,
+    // et deux premières occurrences simultanées s'interbloqueraient. L'upsert suffit : une ligne
+    // affectée = insertion, et la variable de session dit si l'issue était résolue.
+    sqlx::query("SET @e500_reopened = 0").execute(&mut *tx).await?;
 
     let ts = naive(ev.timestamp);
     let title = trunc(&ev.title, 512);
     let level = trunc(&ev.level, 16);
-    let issue_id = sqlx::query(
+    let upsert = sqlx::query(
         "INSERT INTO issues (project_id, fingerprint, title, level, first_seen, last_seen, event_count) \
          VALUES (?, ?, ?, ?, ?, ?, 1) \
          ON DUPLICATE KEY UPDATE id = LAST_INSERT_ID(id), event_count = event_count + 1, \
            first_seen = LEAST(first_seen, VALUES(first_seen)), \
            last_seen = GREATEST(last_seen, VALUES(last_seen)), level = VALUES(level), \
-           status = IF(status = 'resolved', 'unresolved', status)",
+           status = IF((@e500_reopened := (status = 'resolved')), 'unresolved', status)",
     )
     .bind(project.id)
     .bind(&ev.fingerprint)
@@ -156,8 +169,17 @@ pub async fn ingest_event_payload(
     .bind(ts)
     .bind(ts)
     .execute(&mut *tx)
-    .await?
-    .last_insert_id();
+    .await?;
+    let issue_id = upsert.last_insert_id();
+    let reopened: i64 = sqlx::query_scalar("SELECT @e500_reopened").fetch_one(&mut *tx).await?;
+    // 1 ligne affectée : insertion ; 2 : mise à jour (event_count change toujours).
+    let trigger = if upsert.rows_affected() == 1 {
+        Some(AlertTrigger::NewIssue)
+    } else if reopened != 0 {
+        Some(AlertTrigger::Regression)
+    } else {
+        None
+    };
 
     let res = sqlx::query(
         "INSERT INTO events (project_id, issue_id, event_id, level, title, message, platform, release_name, \

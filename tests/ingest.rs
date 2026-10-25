@@ -350,3 +350,27 @@ async fn ignored_issue_and_duplicate_events_trigger_nothing() {
     assert_eq!(s, IngestSummary::default());
     db.cleanup().await;
 }
+
+#[tokio::test]
+async fn concurrent_first_occurrences_of_one_issue_do_not_deadlock() {
+    let (db, store, p) = setup().await;
+    let (db, store, p) = (std::sync::Arc::new(db), std::sync::Arc::new(store), std::sync::Arc::new(p));
+    let mut tasks = Vec::new();
+    for i in 0..24 {
+        let (db, store, p) = (db.clone(), store.clone(), p.clone());
+        tasks.push(tokio::spawn(async move {
+            let id = format!("{i:032x}");
+            let env = envelope(json!({"event_id": id}), &[("event", &error_event(&id, "boom", "pay"))]);
+            ingest::ingest_envelope(&db.pool, &store, &p, &env).await
+        }));
+    }
+    let mut new_issue_alerts = 0;
+    for t in tasks {
+        let summary = t.await.unwrap().expect("l'ingestion concurrente ne doit pas échouer");
+        new_issue_alerts += summary.alerts.iter().filter(|a| a.trigger == AlertTrigger::NewIssue).count();
+    }
+    assert_eq!(count(&db, "events").await, 24);
+    assert_eq!(count(&db, "issues").await, 1);
+    assert_eq!(new_issue_alerts, 1, "une seule alerte « nouvelle issue »");
+    std::sync::Arc::into_inner(db).unwrap().cleanup().await;
+}
