@@ -45,6 +45,8 @@ Backend (`src/`) :
 - `artifact_bundle` : lecture de l'archive zip de sentry-cli (`manifest.json`, source maps, `debug-id`).
 - `cli_upload` : protocole de `sentry-cli sourcemaps upload` (`/api/0/organizations/{org}/chunk-upload/`, `artifactbundle/assemble/`, releases). Le projet est celui du jeton d'upload ; le slug d'organisation est ignoré. Les chunks (`chunks/{projet}/{sha1}`) ne sont pas purgés.
 - `alerts` : alertes email (nouvelle issue, régression) envoyées aux membres dont `project_members.notify` est vrai. `Mailer` : SMTP (lettre), mémoire (tests) ou désactivé. L'envoi SMTP est asynchrone et n'échoue jamais l'ingestion. Un membre règle sa préférence dans Réglages. Limite de débit par projet (`ALERT_MAX_PER_HOUR`, défaut 10, 0 = illimité ; fenêtre fixe d'une heure, table `alert_throttle`) : les alertes en trop sont supprimées et comptées, le prochain email le mentionne.
+- `retention` : délais par projet (`logs_retention_days`, `replays_retention_days`, 30 par défaut, 0 = sans limite, max 3650) réglés dans Réglages ; `purge` supprime par lots les logs et replays (segments + blobs) plus vieux que le délai, lancée au démarrage puis toutes les heures (`spawn_purge_loop`). Les issues et événements ne sont pas purgés.
+- Suppression d'un projet (`projects::delete`, Réglages, propriétaire ou admin, nom à retaper) : cascade SQL puis suppression des blobs `replays/`, `sourcemaps/`, `chunks/` du projet.
 - `sourcemaps` : stockage par projet, association par `debug_id` ou release + chemin (`~/static/app.js.map`), résolution des frames.
 - `stacktrace` : vue exceptions/frames (le plus récent d'abord). Le nom d'une fonction vient du token de **l'appelant** (le nom d'une map à une position est celui de la fonction appelée).
 - `queries` : lectures pour l'UI (issues, événements, logs, replays, erreurs liées).
@@ -91,4 +93,4 @@ Ou avec `curl` : `POST /api/{id}/sourcemaps/?release=1.0.0&name=~%2Fstatic%2Fapp
 
 ## Reste à faire
 
-Test réel contre un S3 (seul le local et la construction S3 sont testés) ; `sentry-cli` : seul l'upload par archive (`artifact_bundles`) est géré, pas les anciens `releases files` ni les fichiers de debug ; replays mobiles (`replay_video`) ; alertes autres que l'email (webhooks) ; suppression de projets ; rétention des données.
+Test réel contre un S3 (seul le local et la construction S3 sont testés) ; `sentry-cli` : seul l'upload par archive (`artifact_bundles`) est géré, pas les anciens `releases files` ni les fichiers de debug ; replays mobiles (`replay_video`) ; alertes autres que l'email (webhooks) ; rétention des événements/issues ; purge des chunks sentry-cli orphelins.

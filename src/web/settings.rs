@@ -4,6 +4,7 @@ use super::projects::{project_access, ProjectAccess};
 use super::{redirect, render_page, CurrentUser, WebError, WebState};
 use crate::auth::build_dsn;
 use crate::projects::{self, RemoveMemberError, Role};
+use crate::retention::{self, Retention};
 use crate::sourcemaps;
 use crate::users::{self, User};
 use axum::extract::{Path, State};
@@ -20,6 +21,8 @@ pub fn routes() -> Router<WebState> {
         .route("/projects/{project_id}/members", post(add_member))
         .route("/projects/{project_id}/members/{user_id}", delete(remove_member))
         .route("/projects/{project_id}/notifications", post(set_notifications))
+        .route("/projects/{project_id}/retention", post(set_retention))
+        .route("/projects/{project_id}/delete", post(delete_project))
         .route("/projects/{project_id}/rotate-key", post(rotate_key))
         .route("/projects/{project_id}/rotate-upload-token", post(rotate_upload_token))
         .route("/projects/{project_id}/sourcemaps/{sourcemap_id}", delete(delete_sourcemap))
@@ -58,6 +61,8 @@ async fn page(
         .map(|m| json!({"id": m.id, "release": m.release, "name": m.name, "debug_id": m.debug_id, "size_bytes": m.size_bytes}))
         .collect::<Vec<_>>());
     props["notifications"] = json!(projects::notifications_enabled(&state.pool, project.id, user.id).await?);
+    let r = retention::get(&state.pool, project.id).await?;
+    props["retention"] = json!({"logs_days": r.logs_days, "replays_days": r.replays_days});
     props["errors"] = errors;
     render_page(state, req, Some(user), "Projects/Settings", props)
 }
@@ -164,4 +169,50 @@ async fn set_notifications(
     }
     projects::set_notifications(&state.pool, project_id, user.id, form.enabled).await?;
     back_to_settings(&req, project_id)
+}
+
+#[derive(Deserialize)]
+struct RetentionForm {
+    logs_days: i64,
+    replays_days: i64,
+}
+
+/// Délais de conservation des logs et des replays (0 = sans limite).
+async fn set_retention(
+    State(state): State<WebState>,
+    CurrentUser(user): CurrentUser,
+    Path(project_id): Path<u64>,
+    req: InertiaRequest,
+    Json(form): Json<RetentionForm>,
+) -> Result<Response, WebError> {
+    let access = manage_access(&state, &user, project_id).await?;
+    // Une valeur négative ou hors plage devient u32::MAX, que `validate` rejette.
+    let days = |v: i64| u32::try_from(v).unwrap_or(u32::MAX);
+    let new = Retention { logs_days: days(form.logs_days), replays_days: days(form.replays_days) };
+    if let Err(errors) = new.validate() {
+        return page(&state, &user, &req, &access, json!(errors)).await;
+    }
+    retention::set(&state.pool, project_id, new).await?;
+    back_to_settings(&req, project_id)
+}
+
+#[derive(Deserialize)]
+struct DeleteForm {
+    name: String,
+}
+
+/// Suppression définitive : l'utilisateur doit retaper le nom exact du projet.
+async fn delete_project(
+    State(state): State<WebState>,
+    CurrentUser(user): CurrentUser,
+    Path(project_id): Path<u64>,
+    req: InertiaRequest,
+    Json(form): Json<DeleteForm>,
+) -> Result<Response, WebError> {
+    let access = manage_access(&state, &user, project_id).await?;
+    if form.name != access.project.name {
+        return page(&state, &user, &req, &access, json!({"name": "Le nom saisi ne correspond pas au nom du projet."})).await;
+    }
+    projects::delete(&state.pool, &state.store, project_id).await.map_err(|e| WebError::Internal(e.to_string()))?;
+    redirect(&req, "/projects", None)
 }

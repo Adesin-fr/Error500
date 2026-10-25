@@ -15,6 +15,7 @@ const props = defineProps<
     members: Member[]
     /** Préférence d'alertes e-mail de l'utilisateur ; null s'il n'est pas membre du projet. */
     notifications: boolean | null
+    retention: { logs_days: number; replays_days: number }
     sourcemaps: SourceMapEntry[]
     errors: FormErrors
   }
@@ -24,6 +25,18 @@ const base = computed(() => `/projects/${props.project.id}`)
 const opts = { preserveScroll: true }
 
 const memberForm = useForm({ email: '', role: 'member' })
+
+const retentionForm = useForm({ logs_days: props.retention.logs_days, replays_days: props.retention.replays_days })
+const deleteForm = useForm({ name: '' })
+const canDelete = computed(() => deleteForm.name === props.project.name)
+
+function saveRetention() {
+  retentionForm.post(`${base.value}/retention`, opts)
+}
+
+function deleteProject() {
+  if (canDelete.value) deleteForm.post(`${base.value}/delete`, opts)
+}
 
 function addMember() {
   memberForm.post(`${base.value}/members`, { preserveScroll: true, onSuccess: () => memberForm.reset('email') })
@@ -73,6 +86,23 @@ const snippet = computed(
           />
           Recevoir un e-mail pour chaque nouvelle issue et chaque régression de ce projet
         </label>
+      </section>
+
+      <section v-if="can_manage" class="card stack">
+        <h2>Rétention des données</h2>
+        <p class="muted">
+          Les logs et les replays plus anciens que ces délais sont supprimés automatiquement (vérification toutes les heures).
+          Les erreurs et leurs issues sont conservées. 0 = conserver sans limite.
+        </p>
+        <form class="row retention" @submit.prevent="saveRetention">
+          <FormField label="Logs (jours)" :error="errors.logs_days">
+            <input v-model.number="retentionForm.logs_days" class="input" type="number" name="logs_days" min="0" max="3650" required />
+          </FormField>
+          <FormField label="Replays (jours)" :error="errors.replays_days">
+            <input v-model.number="retentionForm.replays_days" class="input" type="number" name="replays_days" min="0" max="3650" required />
+          </FormField>
+          <button class="btn btn-primary" type="submit" :disabled="retentionForm.processing">Enregistrer</button>
+        </form>
       </section>
 
       <section class="card stack">
@@ -128,6 +158,20 @@ const snippet = computed(
             </tr>
           </tbody>
         </table>
+      </section>
+
+      <section v-if="can_manage" class="card stack danger-zone">
+        <h2>Supprimer le projet</h2>
+        <p class="muted">
+          Supprime définitivement le projet, ses issues, événements, logs, replays et source maps. Les SDK qui utilisent son DSN
+          recevront des erreurs 403. Cette action est irréversible.
+        </p>
+        <form class="row delete-project" @submit.prevent="deleteProject">
+          <FormField :label="`Saisissez « ${project.name} » pour confirmer`" :error="errors.name">
+            <input v-model="deleteForm.name" class="input" type="text" name="name" autocomplete="off" />
+          </FormField>
+          <button class="btn btn-danger" type="submit" :disabled="!canDelete || deleteForm.processing">Supprimer définitivement</button>
+        </form>
       </section>
     </div>
   </AppLayout>

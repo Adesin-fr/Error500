@@ -20,6 +20,7 @@ const props = (over: Record<string, unknown> = {}) => ({
   members: [{ user_id: 1, name: 'Alice', email: 'alice@example.com', role: 'owner' }, { user_id: 2, name: 'Bob', email: 'bob@example.com', role: 'member' }],
   sourcemaps: [{ id: 9, release: '1.0', name: '~/static/app.min.js.map', debug_id: null, size_bytes: 1536 }],
   notifications: true,
+  retention: { logs_days: 30, replays_days: 30 },
   errors: {},
   ...over,
 })
@@ -55,6 +56,54 @@ describe('Projects/Settings', () => {
   it('hides the preference for someone who is not a member', () => {
     const w = mount(Settings, { props: props({ notifications: null }) as never })
     expect(w.find('input.notifications').exists()).toBe(false)
+  })
+
+  it('edits the retention delays of logs and replays', async () => {
+    const w = mount(Settings, { props: props() as never })
+    expect((w.find('form.retention input[name="logs_days"]').element as HTMLInputElement).value).toBe('30')
+    expect((w.find('form.retention input[name="replays_days"]').element as HTMLInputElement).value).toBe('30')
+    await w.find('form.retention input[name="logs_days"]').setValue('7')
+    await w.find('form.retention').trigger('submit')
+    const form = forms.find((f) => 'logs_days' in f)!
+    expect(form.logs_days).toBe(7)
+    expect(form.replays_days).toBe(30)
+    expect(form.post).toHaveBeenCalledWith('/projects/5/retention', expect.anything())
+  })
+
+  it('shows a retention validation error', () => {
+    const w = mount(Settings, { props: props({ errors: { logs_days: 'Au plus 3650 jours' } }) as never })
+    expect(w.find('form.retention').text()).toContain('Au plus 3650 jours')
+  })
+
+  it('only lets the project name unlock the deletion', async () => {
+    const w = mount(Settings, { props: props() as never })
+    const button = w.find('form.delete-project button[type="submit"]')
+    expect(button.attributes('disabled')).toBeDefined()
+    await w.find('form.delete-project input[name="name"]').setValue('Sho')
+    expect(w.find('form.delete-project button[type="submit"]').attributes('disabled')).toBeDefined()
+    await w.find('form.delete-project input[name="name"]').setValue('Shop')
+    expect(w.find('form.delete-project button[type="submit"]').attributes('disabled')).toBeUndefined()
+    await w.find('form.delete-project').trigger('submit')
+    const form = forms.find((f) => 'name' in f)!
+    expect(form.post).toHaveBeenCalledWith('/projects/5/delete', expect.anything())
+  })
+
+  it('does not submit the deletion while the name is wrong', async () => {
+    const w = mount(Settings, { props: props() as never })
+    await w.find('form.delete-project input[name="name"]').setValue('nope')
+    await w.find('form.delete-project').trigger('submit')
+    expect(forms.find((f) => 'name' in f)!.post).not.toHaveBeenCalled()
+  })
+
+  it('shows the deletion error', () => {
+    const w = mount(Settings, { props: props({ errors: { name: 'Le nom saisi ne correspond pas' } }) as never })
+    expect(w.find('form.delete-project').text()).toContain('Le nom saisi ne correspond pas')
+  })
+
+  it('hides retention and deletion from plain members', () => {
+    const w = mount(Settings, { props: props({ can_manage: false }) as never })
+    expect(w.find('form.retention').exists()).toBe(false)
+    expect(w.find('form.delete-project').exists()).toBe(false)
   })
 
   it('adds a member by email', async () => {

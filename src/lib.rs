@@ -6,6 +6,7 @@ pub mod event;
 pub mod storage;
 pub mod ingest;
 pub mod alerts;
+pub mod retention;
 pub mod http;
 pub mod config;
 pub mod sourcemaps;

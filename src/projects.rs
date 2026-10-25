@@ -230,6 +230,25 @@ pub async fn list_members(pool: &MySqlPool, project_id: u64) -> Result<Vec<Membe
         .collect())
 }
 
+/// Supprime le projet et toutes ses données : les lignes partent en cascade, les blobs (replays,
+/// source maps, chunks sentry-cli) sont supprimés ensuite. Les lignes d'abord : un blob orphelin
+/// (nettoyable) vaut mieux qu'une ligne dont le fichier a disparu.
+pub async fn delete(pool: &MySqlPool, store: &crate::storage::BlobStore, project_id: u64) -> Result<(), DeleteProjectError> {
+    sqlx::query("DELETE FROM projects WHERE id = ?").bind(project_id).execute(pool).await?;
+    for dir in ["replays", "sourcemaps", "chunks"] {
+        store.delete_prefix(&format!("{dir}/{project_id}")).await?;
+    }
+    Ok(())
+}
+
+#[derive(Debug, thiserror::Error)]
+pub enum DeleteProjectError {
+    #[error(transparent)]
+    Db(#[from] sqlx::Error),
+    #[error(transparent)]
+    Storage(#[from] object_store::Error),
+}
+
 /// Active ou coupe les alertes email d'un membre pour ce projet.
 pub async fn set_notifications(pool: &MySqlPool, project_id: u64, user_id: u64, enabled: bool) -> Result<(), sqlx::Error> {
     sqlx::query("UPDATE project_members SET notify = ? WHERE project_id = ? AND user_id = ?")

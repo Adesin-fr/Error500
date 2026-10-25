@@ -1,0 +1,3 @@
+ALTER TABLE projects
+    ADD COLUMN logs_retention_days INT UNSIGNED NOT NULL DEFAULT 30,
+    ADD COLUMN replays_retention_days INT UNSIGNED NOT NULL DEFAULT 30;

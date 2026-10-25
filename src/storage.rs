@@ -93,6 +93,16 @@ impl BlobStore {
         }
     }
 
+    /// Supprime tous les blobs sous `prefix` (un dossier : `replays/12` ne touche pas `replays/120`).
+    pub async fn delete_prefix(&self, prefix: &str) -> object_store::Result<()> {
+        use futures::TryStreamExt;
+        let metas: Vec<_> = self.inner.list(Some(&Path::from(prefix))).try_collect().await?;
+        for meta in metas {
+            self.inner.delete(&meta.location).await?;
+        }
+        Ok(())
+    }
+
     pub async fn delete(&self, key: &str) -> object_store::Result<()> {
         match self.inner.delete(&Path::from(key)).await {
             Ok(()) | Err(object_store::Error::NotFound { .. }) => Ok(()),

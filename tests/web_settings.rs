@@ -227,3 +227,79 @@ async fn non_members_cannot_set_alerts_and_admins_outside_the_project_have_no_pr
     assert_eq!(r.status, StatusCode::NOT_FOUND);
     w.db.cleanup().await;
 }
+
+// --- Rétention et suppression du projet ---
+
+#[tokio::test]
+async fn settings_expose_retention_with_a_30_day_default() {
+    let w = web_app().await;
+    let (p, cookie) = setup(&w).await;
+    let r = w.get(&format!("/projects/{}/settings", p.id), Some(&cookie)).await;
+    assert_eq!(r.props()["retention"], json!({"logs_days": 30, "replays_days": 30}));
+    w.db.cleanup().await;
+}
+
+#[tokio::test]
+async fn owner_changes_the_retention_delays() {
+    let w = web_app().await;
+    let (p, cookie) = setup(&w).await;
+    let url = format!("/projects/{}/retention", p.id);
+    let r = w.post_json(&url, Some(&cookie), json!({"logs_days": 7, "replays_days": 0})).await;
+    assert_eq!(r.status, StatusCode::SEE_OTHER);
+    assert_eq!(r.location(), Some(format!("/projects/{}/settings", p.id)));
+    let got = error500::retention::get(&w.db.pool, p.id).await.unwrap();
+    assert_eq!((got.logs_days, got.replays_days), (7, 0));
+    w.db.cleanup().await;
+}
+
+#[tokio::test]
+async fn invalid_retention_is_reported_and_not_saved() {
+    let w = web_app().await;
+    let (p, cookie) = setup(&w).await;
+    let url = format!("/projects/{}/retention", p.id);
+    for body in [json!({"logs_days": 99999, "replays_days": 5}), json!({"logs_days": -1, "replays_days": 5})] {
+        let r = w.post_json(&url, Some(&cookie), body).await;
+        assert_eq!(r.status, StatusCode::OK);
+        assert_eq!(r.component(), "Projects/Settings");
+        assert!(r.props()["errors"]["logs_days"].is_string());
+    }
+    let got = error500::retention::get(&w.db.pool, p.id).await.unwrap();
+    assert_eq!((got.logs_days, got.replays_days), (30, 30));
+    w.db.cleanup().await;
+}
+
+#[tokio::test]
+async fn deleting_the_project_requires_its_exact_name() {
+    let w = web_app().await;
+    let (p, cookie) = setup(&w).await;
+    let url = format!("/projects/{}/delete", p.id);
+    let r = w.post_json(&url, Some(&cookie), json!({"name": "autre chose"})).await;
+    assert_eq!(r.status, StatusCode::OK);
+    assert!(r.props()["errors"]["name"].is_string());
+    assert!(projects::get(&w.db.pool, p.id).await.unwrap().is_some());
+
+    let r = w.post_json(&url, Some(&cookie), json!({"name": "App"})).await;
+    assert_eq!(r.status, StatusCode::SEE_OTHER);
+    assert_eq!(r.location(), Some("/projects".to_string()));
+    assert!(projects::get(&w.db.pool, p.id).await.unwrap().is_none());
+    w.db.cleanup().await;
+}
+
+#[tokio::test]
+async fn retention_and_deletion_are_reserved_to_managers() {
+    let w = web_app().await;
+    let (p, _) = setup(&w).await;
+    let (bob, bob_cookie) = w.login_as("bob@example.com").await;
+    projects::add_member(&w.db.pool, p.id, bob, Role::Member).await.unwrap();
+    let (_, eve_cookie) = w.login_as("eve@example.com").await;
+    let base = format!("/projects/{}", p.id);
+    let retention = json!({"logs_days": 1, "replays_days": 1});
+    let delete = json!({"name": "App"});
+
+    assert_eq!(w.post_json(&format!("{base}/retention"), Some(&bob_cookie), retention.clone()).await.status, StatusCode::FORBIDDEN);
+    assert_eq!(w.post_json(&format!("{base}/delete"), Some(&bob_cookie), delete.clone()).await.status, StatusCode::FORBIDDEN);
+    assert_eq!(w.post_json(&format!("{base}/retention"), Some(&eve_cookie), retention).await.status, StatusCode::NOT_FOUND);
+    assert_eq!(w.post_json(&format!("{base}/delete"), Some(&eve_cookie), delete).await.status, StatusCode::NOT_FOUND);
+    assert!(projects::get(&w.db.pool, p.id).await.unwrap().is_some());
+    w.db.cleanup().await;
+}
