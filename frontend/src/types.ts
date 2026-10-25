@@ -108,6 +108,8 @@ export interface Replay {
   release_name: string | null
   environment: string | null
   error_ids: string[]
+  /** Un segment a été reçu dans la dernière minute : la session est en cours. */
+  live: boolean
 }
 
 export interface LinkedError {

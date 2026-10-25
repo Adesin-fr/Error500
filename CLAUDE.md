@@ -49,6 +49,7 @@ Backend (`src/`) :
 - Suppression d'un projet (`projects::delete`, Réglages, propriétaire ou admin, nom à retaper) : cascade SQL puis suppression des blobs `replays/`, `sourcemaps/`, `chunks/` du projet.
 - `sourcemaps` : stockage par projet, association par `debug_id` ou release + chemin (`~/static/app.js.map`), résolution des frames.
 - `stacktrace` : vue exceptions/frames (le plus récent d'abord). Le nom d'une fonction vient du token de **l'appelant** (le nom d'une map à une position est celui de la fonction appelée).
+- Mode live des replays : une session est « en direct » tant qu'un segment a été reçu depuis moins de 60 s (`replay_segments.received_at`, `queries::LIVE_WINDOW_SECS`). `GET /projects/{id}/replays/{rid}/stream[?after=N]` (SSE, `web::replays::stream`) envoie `status` (`{live}`) puis `segment` (`{segment_id, events}`) pour chaque segment, y compris ceux qui arrivent pendant que le flux est ouvert ; la base est interrogée toutes les `live_poll` (1 s), sans état partagé entre instances. Le retard réel est celui du SDK Sentry, qui envoie ses segments par lots toutes les 5 à 15 s : ce n'est pas du temps réel image par image.
 - `queries` : lectures pour l'UI (issues, événements, logs, replays, erreurs liées).
 - `storage` : `BlobStore` (disque local, S3 ou mémoire) via `object_store`.
 - `http` : API d'ingestion `/api/{id}/envelope/`, `/store/`, `/sourcemaps/` (Bearer), `/health` ; gzip/deflate, CORS, limite de taille.
@@ -60,7 +61,7 @@ Frontend (`frontend/`, Vue 3 + TypeScript + Vite, `<script setup>`) :
 
 - `src/pages/**` : une page par composant Inertia rendu par Rust (`Issues/Show`, `Replays/Show`…).
 - `src/components/**` : `StackTrace`, `StackFrame`, `Breadcrumbs`, `ReplayPlayer` (`@sentry-internal/rrweb-player`, chargé à la demande), `Pagination`…
-- `src/types.ts` : formes des props envoyées par Rust. `src/lib/format.ts` : formatage. `src/lib/replay.ts` : les événements personnalisés du SDK Sentry (type 5) sont horodatés en secondes, rrweb attend des millisecondes ; ils sont convertis avant le lecteur (sinon la durée de la session affichée est absurde).
+- `src/types.ts` : formes des props envoyées par Rust. `src/lib/format.ts` : formatage. `ReplayPlayer` en mode live : `liveMode` rrweb, baseline = plus ancien timestamp du premier lot (rrweb applique « en rattrapage », donc sans mutations du DOM, tout événement antérieur à la baseline), rattrapage de l'historique à ×8 puis retour à ×1. `src/lib/replay.ts` : les événements personnalisés du SDK Sentry (type 5) sont horodatés en secondes, rrweb attend des millisecondes ; ils sont convertis avant le lecteur (sinon la durée de la session affichée est absurde).
 - Tests : Vitest + Vue Test Utils (`npm test`), tests boîte noire ; `src/test/inertiaMock.ts` remplace `@inertiajs/vue3`.
 - Le build (`frontend/dist`) est embarqué dans le binaire (rust-embed) ; `build.rs` relance la compilation quand il change.
 

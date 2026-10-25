@@ -31,6 +31,7 @@ pub async fn web_app_with(assets: Assets) -> W {
         assets: Arc::new(assets),
         dev_url: None,
         secure_cookies: false,
+        live_poll: std::time::Duration::from_millis(50),
     });
     W { db, store, router, version }
 }
@@ -118,6 +119,16 @@ impl W {
 
     pub async fn delete(&self, uri: &str, cookie: Option<&str>) -> Resp {
         self.send(self.base(Method::DELETE, uri, cookie).body(Body::empty()).unwrap()).await
+    }
+
+    /// GET d'un flux (SSE) : renvoie le statut, les en-têtes et le corps à lire au fil de l'eau.
+    pub async fn open_stream(&self, uri: &str, cookie: Option<&str>) -> (StatusCode, HeaderMap, axum::body::BodyDataStream) {
+        let mut b = Request::builder().method(Method::GET).uri(uri).header(header::ACCEPT, "text/event-stream");
+        if let Some(c) = cookie {
+            b = b.header(header::COOKIE, c);
+        }
+        let resp = self.router.clone().oneshot(b.body(Body::empty()).unwrap()).await.unwrap();
+        (resp.status(), resp.headers().clone(), resp.into_body().into_data_stream())
     }
 
     /// Crée un utilisateur et une session ; renvoie (id, cookie).

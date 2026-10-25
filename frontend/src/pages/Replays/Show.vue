@@ -5,7 +5,7 @@ import { formatDateTime, formatDuration, shortId } from '../../lib/format'
 import AppLayout from '../../layouts/AppLayout.vue'
 import type { LinkedError, ProjectProps, Replay } from '../../types'
 
-defineProps<ProjectProps & { replay: Replay; events_url: string; errors: LinkedError[] }>()
+defineProps<ProjectProps & { replay: Replay; events_url: string; stream_url: string; errors: LinkedError[] }>()
 </script>
 
 <template>
@@ -13,7 +13,7 @@ defineProps<ProjectProps & { replay: Replay; events_url: string; errors: LinkedE
     <h1>Session <span class="mono">{{ shortId(replay.replay_id) }}</span></h1>
     <div class="layout">
       <section class="card">
-        <ReplayPlayer :events-url="events_url" />
+        <ReplayPlayer :events-url="events_url" :stream-url="stream_url" :live="replay.live" />
       </section>
       <aside class="stack">
         <section class="card">

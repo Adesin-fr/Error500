@@ -242,12 +242,20 @@ pub struct ReplayRow {
     pub release_name: Option<String>,
     pub environment: Option<String>,
     pub error_ids: Option<String>,
+    /// 1 si un segment a été reçu dans les `LIVE_WINDOW_SECS` dernières secondes (session en cours).
+    pub live: i64,
 }
+
+/// Une session est « en direct » tant qu'elle a reçu un segment depuis moins de ce délai : le SDK Sentry
+/// en envoie toutes les 5 à 15 secondes tant que l'utilisateur est actif.
+pub const LIVE_WINDOW_SECS: u32 = 60;
 
 const REPLAY_SELECT: &str = "SELECT r.replay_id, r.first_seen, r.last_seen, \
     TIMESTAMPDIFF(SECOND, r.first_seen, r.last_seen) AS duration_seconds, \
     (SELECT COUNT(*) FROM replay_segments s WHERE s.project_id = r.project_id AND s.replay_id = r.replay_id) AS segment_count, \
-    r.urls, r.user_label, r.browser, r.os, r.release_name, r.environment, r.error_ids \
+    r.urls, r.user_label, r.browser, r.os, r.release_name, r.environment, r.error_ids, \
+    CAST(EXISTS(SELECT 1 FROM replay_segments s WHERE s.project_id = r.project_id AND s.replay_id = r.replay_id \
+      AND s.received_at > CURRENT_TIMESTAMP(3) - INTERVAL 60 SECOND) AS SIGNED) AS live \
     FROM replays r WHERE r.project_id = ?";
 
 pub async fn list_replays(pool: &MySqlPool, project_id: u64, limit: u32) -> Result<Vec<ReplayRow>, sqlx::Error> {

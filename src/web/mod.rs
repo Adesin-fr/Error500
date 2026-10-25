@@ -36,6 +36,8 @@ pub struct WebState {
     /// Serveur de développement Vite (rechargement à chaud) ; `None` en production.
     pub dev_url: Option<String>,
     pub secure_cookies: bool,
+    /// Intervalle d'interrogation de la base par le flux live des replays.
+    pub live_poll: std::time::Duration,
 }
 
 pub fn router(state: WebState) -> Router {

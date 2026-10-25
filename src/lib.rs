@@ -35,6 +35,7 @@ pub fn app(pool: sqlx::MySqlPool, store: storage::BlobStore, mailer: alerts::Mai
         assets: std::sync::Arc::new(web::assets::Assets::embedded()),
         dev_url: config.vite_dev_url.clone(),
         secure_cookies: config.secure_cookies(),
+        live_poll: std::time::Duration::from_secs(1),
     });
     ingest.merge(web)
 }

@@ -352,7 +352,8 @@ async fn ingest_recording(
         .await?;
     sqlx::query(
         "INSERT INTO replay_segments (project_id, replay_id, segment_id, blob_key, size_bytes) \
-         VALUES (?, ?, ?, ?, ?) ON DUPLICATE KEY UPDATE blob_key = VALUES(blob_key), size_bytes = VALUES(size_bytes)",
+         VALUES (?, ?, ?, ?, ?) ON DUPLICATE KEY UPDATE blob_key = VALUES(blob_key), size_bytes = VALUES(size_bytes), \
+           received_at = CURRENT_TIMESTAMP(3)",
     )
     .bind(project.id)
     .bind(replay_id)

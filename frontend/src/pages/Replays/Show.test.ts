@@ -12,8 +12,9 @@ const props = {
   project: { id: 5, name: 'Shop', slug: 'shop' },
   can_manage: false,
   replay: { replay_id: 'ab'.repeat(16), first_seen: '2023-11-14T10:00:00Z', last_seen: '2023-11-14T10:02:05Z', duration_seconds: 125, segment_count: 3,
-    urls: ['https://app.example.com/a'], user_label: 'jane@example.com', browser: 'Chrome 120', os: 'macOS 14', release_name: '1.0', environment: 'prod', error_ids: [] },
+    urls: ['https://app.example.com/a'], live: false, user_label: 'jane@example.com', browser: 'Chrome 120', os: 'macOS 14', release_name: '1.0', environment: 'prod', error_ids: [] },
   events_url: '/projects/5/replays/abc/events',
+  stream_url: '/projects/5/replays/abc/stream',
   errors: [{ event_id: 'e'.repeat(32), issue_id: 11, title: 'TypeError: boom' }],
 }
 
@@ -21,6 +22,15 @@ describe('Replays/Show', () => {
   it('embeds the player on the events URL', () => {
     const w = mount(Show, { props: props as never, global: { stubs: { ReplayPlayer: { props: ['eventsUrl'], template: '<div class="player-stub">{{ eventsUrl }}</div>' } } } })
     expect(w.find('.player-stub').text()).toBe('/projects/5/replays/abc/events')
+  })
+
+  it('hands the live flag and stream URL to the player', () => {
+    const stub = { props: ['eventsUrl', 'streamUrl', 'live'], template: '<div class="player-stub">{{ streamUrl }}|{{ live }}</div>' }
+    const live = { ...props, replay: { ...props.replay, live: true } }
+    const w = mount(Show, { props: live as never, global: { stubs: { ReplayPlayer: stub } } })
+    expect(w.find('.player-stub').text()).toBe('/projects/5/replays/abc/stream|true')
+    const w2 = mount(Show, { props: props as never, global: { stubs: { ReplayPlayer: stub } } })
+    expect(w2.find('.player-stub').text()).toBe('/projects/5/replays/abc/stream|false')
   })
 
   it('shows who/where and links the errors captured during the session', () => {
