@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { onBeforeUnmount, onMounted, ref, useTemplateRef } from 'vue'
-import { normalizeReplayEvents } from '../lib/replay'
+import { normalizeReplayEvents, withMarkers, type ReplayMarker } from '../lib/replay'
 
 const props = defineProps<{
   eventsUrl: string
@@ -8,6 +8,8 @@ const props = defineProps<{
   streamUrl?: string
   /** Suivre la session en direct plutôt que de charger un enregistrement terminé. */
   live?: boolean
+  /** Erreurs à repérer sur la timeline (replay enregistré uniquement). */
+  markers?: ReplayMarker[]
 }>()
 
 type Status = 'loading' | 'ready' | 'short' | 'error'
@@ -23,6 +25,7 @@ interface PlayerHandle {
   addEvent?: (event: unknown) => void
   getReplayer?: () => { startLive: (baselineTime?: number) => void }
   setSpeed?: (speed: number) => void
+  goto?: (timeOffset: number, play?: boolean) => void
 }
 let player: PlayerHandle | null = null
 let source: EventSource | null = null
@@ -52,8 +55,11 @@ async function loadRecording() {
     status.value = 'short'
     return
   }
-  player = await createPlayer(events)
-  if (player) status.value = 'ready'
+  const marked = props.markers?.length ? withMarkers(normalizeReplayEvents(events), props.markers) : null
+  player = await createPlayer(marked?.events ?? events, marked ? { tags: marked.tags } : {})
+  if (!player) return
+  if (marked?.seekMs != null) player.goto?.(marked.seekMs)
+  status.value = 'ready'
 }
 
 // --- Mode live : les segments arrivent un à un, on les applique dans l'ordre de réception. ---

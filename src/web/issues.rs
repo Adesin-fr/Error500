@@ -91,10 +91,39 @@ async fn show(
     let ctx = context_view(&event.payload);
 
     // Le replay n'est proposé que s'il a bien été reçu.
-    let replay_id = match ctx["replay_id"].as_str() {
-        Some(id) if queries::get_replay(&state.pool, project_id, id).await?.is_some() => json!(id),
-        _ => Value::Null,
-    };
+    let mut replay_id = Value::Null;
+    let mut replay_timeline = Value::Null;
+    if let Some(id) = ctx["replay_id"].as_str() {
+        if let Some(replay) = queries::get_replay(&state.pool, project_id, id).await? {
+            replay_id = json!(id);
+            // Repères : l'erreur affichée plus les autres erreurs de la même session, dans l'ordre du temps.
+            let mut ids: Vec<String> = replay
+                .error_ids
+                .as_deref()
+                .and_then(|s| serde_json::from_str(s).ok())
+                .unwrap_or_default();
+            if !ids.contains(&event.event_id) {
+                ids.push(event.event_id.clone());
+            }
+            let markers: Vec<Value> = queries::linked_errors(&state.pool, project_id, &ids)
+                .await?
+                .into_iter()
+                .map(|e| {
+                    json!({
+                        "event_id": e.event_id,
+                        "issue_id": e.issue_id,
+                        "title": e.title,
+                        "occurred_at": e.occurred_at,
+                        "current": e.event_id == event.event_id,
+                    })
+                })
+                .collect();
+            replay_timeline = json!({
+                "events_url": format!("/projects/{project_id}/replays/{id}/events"),
+                "markers": markers,
+            });
+        }
+    }
 
     let mut event_props = ctx;
     event_props["event_id"] = json!(event.event_id);
@@ -110,6 +139,7 @@ async fn show(
     props["exceptions"] = json!(exceptions);
     props["events"] = json!(queries::list_events(&state.pool, project_id, issue_id, 20).await?);
     props["replay_id"] = replay_id;
+    props["replay_timeline"] = replay_timeline;
     render_page(&state, &req, Some(&user), "Issues/Show", props)
 }
 

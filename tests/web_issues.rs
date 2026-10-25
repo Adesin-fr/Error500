@@ -175,3 +175,99 @@ async fn status_change_is_refused_to_non_members() {
     assert_eq!(issue.status, error500::queries::IssueStatus::Unresolved);
     w.db.cleanup().await;
 }
+
+// --- Replay de la session en pied de page, avec repères aux erreurs ---
+
+fn js_event_in_replay(id: &str, ts: f64, ty: &str, rid: &str) -> serde_json::Value {
+    let mut ev = js_event(id, ts);
+    ev["exception"]["values"][0]["type"] = json!(ty);
+    ev["contexts"] = json!({"replay": {"replay_id": rid}});
+    ev
+}
+
+async fn add_replay(w: &W, p: &error500::projects::Project, rid: &str, error_ids: &[String]) {
+    sqlx::query("INSERT INTO replays (project_id, replay_id, first_seen, last_seen, error_ids) VALUES (?, ?, NOW(3), NOW(3), ?)")
+        .bind(p.id)
+        .bind(rid)
+        .bind(json!(error_ids).to_string())
+        .execute(&w.db.pool)
+        .await
+        .unwrap();
+}
+
+#[tokio::test]
+async fn issue_page_embeds_the_session_with_a_marker_on_the_error() {
+    let w = web_app().await;
+    let (p, cookie) = setup(&w).await;
+    let rid = "ab".repeat(16);
+    w.event_payload(&p, js_event_in_replay(&hex_id(1), 1_700_000_000.0, "TypeError", &rid)).await;
+    add_replay(&w, &p, &rid, &[hex_id(1)]).await;
+    let iid = first_issue_id(&w, p.id).await;
+
+    let r = w.get(&format!("/projects/{}/issues/{iid}", p.id), Some(&cookie)).await;
+    let t = &r.props()["replay_timeline"];
+    assert_eq!(t["events_url"], format!("/projects/{}/replays/{rid}/events", p.id));
+    let markers = t["markers"].as_array().unwrap();
+    assert_eq!(markers.len(), 1);
+    assert_eq!(markers[0]["event_id"], hex_id(1));
+    assert_eq!(markers[0]["current"], true);
+    assert_eq!(markers[0]["issue_id"], iid);
+    assert!(markers[0]["title"].as_str().unwrap().starts_with("TypeError"));
+    assert!(markers[0]["occurred_at"].as_str().unwrap().starts_with("2023-11-14T22:13:20"), "{}", markers[0]["occurred_at"]);
+    w.db.cleanup().await;
+}
+
+#[tokio::test]
+async fn the_current_error_is_marked_even_if_the_replay_does_not_list_it() {
+    let w = web_app().await;
+    let (p, cookie) = setup(&w).await;
+    let rid = "cd".repeat(16);
+    w.event_payload(&p, js_event_in_replay(&hex_id(1), 1_700_000_000.0, "TypeError", &rid)).await;
+    add_replay(&w, &p, &rid, &[]).await;
+    let iid = first_issue_id(&w, p.id).await;
+    let r = w.get(&format!("/projects/{}/issues/{iid}", p.id), Some(&cookie)).await;
+    let markers = r.props()["replay_timeline"]["markers"].clone();
+    assert_eq!(markers.as_array().unwrap().len(), 1);
+    assert_eq!(markers[0]["current"], true);
+    w.db.cleanup().await;
+}
+
+#[tokio::test]
+async fn other_errors_of_the_same_session_get_their_own_markers_in_time_order() {
+    let w = web_app().await;
+    let (p, cookie) = setup(&w).await;
+    let rid = "ef".repeat(16);
+    w.event_payload(&p, js_event_in_replay(&hex_id(1), 1_700_000_030.0, "TypeError", &rid)).await;
+    w.event_payload(&p, js_event_in_replay(&hex_id(2), 1_700_000_010.0, "RangeError", &rid)).await;
+    // une erreur d'un autre projet et un identifiant inconnu ne produisent aucun repère
+    let (bob, _) = w.login_as("bob@example.com").await;
+    let other = w.project_for(bob, "Autre").await;
+    w.event_payload(&other, js_event_in_replay(&hex_id(3), 1_700_000_020.0, "Error", &rid)).await;
+    add_replay(&w, &p, &rid, &[hex_id(2), hex_id(1), hex_id(3), hex_id(404)]).await;
+
+    let issues = error500::queries::list_issues(&w.db.pool, p.id, None, 10, 0).await.unwrap();
+    let type_error = issues.iter().find(|i| i.title.starts_with("TypeError")).unwrap().id;
+    let r = w.get(&format!("/projects/{}/issues/{type_error}", p.id), Some(&cookie)).await;
+    let markers = r.props()["replay_timeline"]["markers"].as_array().unwrap().clone();
+    let ids: Vec<&str> = markers.iter().map(|m| m["event_id"].as_str().unwrap()).collect();
+    let (id1, id2) = (hex_id(1), hex_id(2));
+    assert_eq!(ids, vec![id2.as_str(), id1.as_str()], "ordre chronologique, sans l'autre projet ni l'inconnu");
+    assert_eq!(markers[0]["current"], false);
+    assert_eq!(markers[1]["current"], true);
+    w.db.cleanup().await;
+}
+
+#[tokio::test]
+async fn no_timeline_without_a_received_replay() {
+    let w = web_app().await;
+    let (p, cookie) = setup(&w).await;
+    w.event_payload(&p, js_event_in_replay(&hex_id(1), 1_700_000_000.0, "TypeError", &"11".repeat(16))).await;
+    let iid = first_issue_id(&w, p.id).await;
+    let url = format!("/projects/{}/issues/{iid}", p.id);
+    assert!(w.get(&url, Some(&cookie)).await.props()["replay_timeline"].is_null(), "replay inconnu");
+
+    let w2_event = js_event(&hex_id(2), 1_700_000_100.0);
+    w.event_payload(&p, w2_event).await;
+    assert!(w.get(&url, Some(&cookie)).await.props()["replay_timeline"].is_null());
+    w.db.cleanup().await;
+}

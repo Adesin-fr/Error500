@@ -344,6 +344,7 @@ pub struct LinkedError {
     pub event_id: String,
     pub issue_id: u64,
     pub title: String,
+    pub occurred_at: DateTime<Utc>,
 }
 
 /// Erreurs du projet correspondant à ces identifiants d'événement (ceux inconnus sont ignorés).
@@ -353,7 +354,7 @@ pub async fn linked_errors(pool: &MySqlPool, project_id: u64, event_ids: &[Strin
     }
     let placeholders = vec!["?"; event_ids.len()].join(", ");
     let sql = format!(
-        "SELECT e.event_id, e.issue_id, e.title FROM events e WHERE e.project_id = ? AND e.event_id IN ({placeholders}) \
+        "SELECT e.event_id, e.issue_id, e.title, e.occurred_at FROM events e WHERE e.project_id = ? AND e.event_id IN ({placeholders}) \
          ORDER BY e.occurred_at"
     );
     let mut q = sqlx::query_as(sqlx::AssertSqlSafe(sql)).bind(project_id);

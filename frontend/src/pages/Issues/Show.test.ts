@@ -1,5 +1,5 @@
 import { mount } from '@vue/test-utils'
-import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 vi.mock('@inertiajs/vue3', async () => (await import('../../test/inertiaMock')).mock)
 import { resetInertiaMock, router } from '../../test/inertiaMock'
@@ -24,6 +24,7 @@ const props = {
     { event_id: 'b'.repeat(32), occurred_at: '2023-11-14T10:00:00Z', release: '1.0', environment: 'prod' },
   ],
   replay_id: null,
+  replay_timeline: null,
 }
 
 describe('Issues/Show', () => {
@@ -63,5 +64,61 @@ describe('Issues/Show', () => {
     const rid = 'c'.repeat(32)
     const w = mount(Show, { props: { ...props, replay_id: rid } as never })
     expect(w.find('a.replay-link').attributes('href')).toBe(`/projects/5/replays/${rid}`)
+  })
+
+  describe('session replay footer', () => {
+    const timeline = {
+      events_url: '/projects/5/replays/abc/events',
+      markers: [
+        { event_id: 'c'.repeat(32), issue_id: 12, title: 'RangeError: other', occurred_at: '2023-11-14T10:59:50Z', current: false },
+        { event_id: 'a'.repeat(32), issue_id: 11, title: 'TypeError: x is undefined', occurred_at: '2023-11-14T11:00:00Z', current: true },
+      ],
+    }
+    const stub = { props: ['eventsUrl', 'markers'], template: '<div class="player-stub">{{ eventsUrl }}|{{ markers.map((m) => m.timestamp + (m.current ? "*" : "")).join(",") }}</div>' }
+    const mountWith = (over: Record<string, unknown>) =>
+      mount(Show, { props: { ...props, replay_id: 'abc', ...over } as never, global: { stubs: { ReplayPlayer: stub } } })
+
+    // Sans observateur d'intersection (très vieux navigateurs), le replay se charge tout de suite.
+    beforeEach(() => vi.stubGlobal('IntersectionObserver', undefined))
+    afterEach(() => vi.unstubAllGlobals())
+
+    it('embeds the session replay at the bottom of the page, with the errors as markers', async () => {
+      const w = mountWith({ replay_timeline: timeline })
+      await w.vm.$nextTick()
+      const footer = w.find('.replay-footer')
+      expect(footer.exists()).toBe(true)
+      const t = (iso: string) => Date.parse(iso)
+      expect(footer.find('.player-stub').text()).toBe(
+        `/projects/5/replays/abc/events|${t('2023-11-14T10:59:50Z')},${t('2023-11-14T11:00:00Z')}*`,
+      )
+    })
+
+    it('explains the markers, and links to the full session', () => {
+      const w = mountWith({ replay_timeline: timeline })
+      expect(w.find('.replay-footer').text()).toContain('Cette erreur')
+      expect(w.find('.replay-footer').text()).toContain('Autres erreurs')
+      expect(w.find('.replay-footer a[href="/projects/5/replays/abc"]').exists()).toBe(true)
+    })
+
+    it('has no footer when the session has no replay', () => {
+      expect(mountWith({ replay_timeline: null }).find('.replay-footer').exists()).toBe(false)
+    })
+
+    it('loads the replay only once the footer scrolls into view', async () => {
+      let notify: (entries: Array<{ isIntersecting: boolean }>) => void = () => {}
+      vi.stubGlobal('IntersectionObserver', class {
+        constructor(cb: typeof notify) { notify = cb }
+        observe() {}
+        disconnect() {}
+      })
+      const w = mountWith({ replay_timeline: timeline })
+      expect(w.find('.player-stub').exists()).toBe(false)
+      notify([{ isIntersecting: false }])
+      await w.vm.$nextTick()
+      expect(w.find('.player-stub').exists()).toBe(false)
+      notify([{ isIntersecting: true }])
+      await w.vm.$nextTick()
+      expect(w.find('.player-stub').exists()).toBe(true)
+    })
   })
 })

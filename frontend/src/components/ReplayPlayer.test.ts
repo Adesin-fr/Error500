@@ -7,6 +7,7 @@ const players: Array<{
   addEvent: ReturnType<typeof vi.fn>
   startLive: ReturnType<typeof vi.fn>
   setSpeed: ReturnType<typeof vi.fn>
+  goto: ReturnType<typeof vi.fn>
 }> = []
 
 /** EventSource factice : les tests y « poussent » des messages comme le ferait le serveur. */
@@ -35,6 +36,7 @@ vi.mock('@sentry-internal/rrweb-player', () => ({
     addEvent = vi.fn()
     startLive = vi.fn()
     setSpeed = vi.fn()
+    goto = vi.fn()
     constructor(options: any) {
       this.options = options
       players.push(this as never)
@@ -121,6 +123,33 @@ describe('ReplayPlayer', () => {
     await flushPromises()
     w.unmount()
     expect(players[0]!.$destroy).toHaveBeenCalled()
+  })
+
+  describe('error markers', () => {
+    // Timestamps réalistes (ms epoch) : sous 1e11 le lecteur les prendrait pour des secondes.
+    const T0 = 1_792_000_000_000
+    const recording = [{ type: 4, timestamp: T0 }, { type: 2, timestamp: T0 + 100 }, { type: 3, timestamp: T0 + 30_000 }]
+
+    it('tags the timeline at the instant of the error and starts a few seconds before it', async () => {
+      vi.stubGlobal('fetch', respond(recording))
+      mount(ReplayPlayer, { props: { eventsUrl: '/x', markers: [{ timestamp: T0 + 20_000, label: 'TypeError: boom', current: true }] } })
+      await flushPromises()
+      const p = players[0]!
+      const custom = (p.options.props.events as Array<{ type: number; timestamp: number; data?: { tag: string } }>).filter((e) => e.type === 5)
+      expect(custom).toHaveLength(1)
+      expect(custom[0]!.timestamp).toBe(T0 + 20_000)
+      expect(custom[0]!.data!.tag).toBe('error')
+      expect(Object.keys(p.options.props.tags)).toContain('error')
+      expect(p.goto).toHaveBeenCalledWith(17_000)
+    })
+
+    it('does not touch the player when there are no markers', async () => {
+      vi.stubGlobal('fetch', respond(recording))
+      mount(ReplayPlayer, { props: { eventsUrl: '/x' } })
+      await flushPromises()
+      expect(players[0]!.options.props.tags).toBeUndefined()
+      expect(players[0]!.goto).not.toHaveBeenCalled()
+    })
   })
 
   describe('live mode', () => {

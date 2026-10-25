@@ -122,6 +122,13 @@ export interface LinkedError {
   event_id: string
   issue_id: number
   title: string
+  occurred_at: string
+}
+
+/** Replay de la session d'une erreur, avec les erreurs de cette session à repérer sur sa timeline. */
+export interface ReplayTimeline {
+  events_url: string
+  markers: Array<{ event_id: string; issue_id: number; title: string; occurred_at: string; current: boolean }>
 }
 
 export interface LogEntry {
