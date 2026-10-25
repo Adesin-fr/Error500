@@ -36,17 +36,29 @@ fn replay_json(r: &ReplayRow) -> Value {
     v
 }
 
+#[derive(Deserialize)]
+struct IndexParams {
+    user: Option<String>,
+}
+
 async fn index(
     State(state): State<WebState>,
     CurrentUser(user): CurrentUser,
     Path(project_id): Path<u64>,
+    Query(params): Query<IndexParams>,
     req: InertiaRequest,
 ) -> Result<Response, WebError> {
     let access = project_access(&state, &user, project_id).await?;
-    let replays: Vec<Value> =
-        queries::list_replays(&state.pool, project_id, 100).await?.iter().map(replay_json).collect();
+    let filter_user = params.user.as_deref().map(str::trim).filter(|u| !u.is_empty());
+    let replays: Vec<Value> = queries::list_replays_for_user(&state.pool, project_id, filter_user, 100)
+        .await?
+        .iter()
+        .map(replay_json)
+        .collect();
     let mut props = access.props();
     props["replays"] = json!(replays);
+    props["filters"] = json!({ "user": filter_user });
+    props["users"] = json!(queries::replay_users(&state.pool, project_id).await?);
     render_page(&state, &req, Some(&user), "Replays/Index", props)
 }
 

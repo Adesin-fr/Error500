@@ -259,11 +259,45 @@ const REPLAY_SELECT: &str = "SELECT r.replay_id, r.first_seen, r.last_seen, \
     FROM replays r WHERE r.project_id = ?";
 
 pub async fn list_replays(pool: &MySqlPool, project_id: u64, limit: u32) -> Result<Vec<ReplayRow>, sqlx::Error> {
-    sqlx::query_as(sqlx::AssertSqlSafe(format!("{REPLAY_SELECT} ORDER BY r.last_seen DESC, r.id DESC LIMIT ?")))
-        .bind(project_id)
-        .bind(limit)
-        .fetch_all(pool)
-        .await
+    list_replays_for_user(pool, project_id, None, limit).await
+}
+
+/// Replays les plus récents ; `user` : sous-chaîne (sans casse) à retrouver dans l'utilisateur de la session.
+/// Les sessions anonymes ne correspondent à aucun filtre.
+pub async fn list_replays_for_user(
+    pool: &MySqlPool,
+    project_id: u64,
+    user: Option<&str>,
+    limit: u32,
+) -> Result<Vec<ReplayRow>, sqlx::Error> {
+    let pattern = user.filter(|u| !u.is_empty()).map(|u| format!("%{}%", like_escape(u)));
+    sqlx::query_as(sqlx::AssertSqlSafe(format!(
+        "{REPLAY_SELECT} AND (? IS NULL OR r.user_label LIKE ?) ORDER BY r.last_seen DESC, r.id DESC LIMIT ?"
+    )))
+    .bind(project_id)
+    .bind(&pattern)
+    .bind(&pattern)
+    .bind(limit)
+    .fetch_all(pool)
+    .await
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, FromRow)]
+pub struct ReplayUser {
+    pub label: String,
+    pub count: i64,
+}
+
+/// Utilisateurs connus du projet avec leur nombre de sessions, les plus actifs d'abord.
+pub async fn replay_users(pool: &MySqlPool, project_id: u64) -> Result<Vec<ReplayUser>, sqlx::Error> {
+    sqlx::query_as(
+        "SELECT user_label AS label, COUNT(*) AS count FROM replays \
+         WHERE project_id = ? AND user_label IS NOT NULL AND user_label <> '' \
+         GROUP BY user_label ORDER BY count DESC, label LIMIT 200",
+    )
+    .bind(project_id)
+    .fetch_all(pool)
+    .await
 }
 
 pub async fn get_replay(pool: &MySqlPool, project_id: u64, replay_id: &str) -> Result<Option<ReplayRow>, sqlx::Error> {

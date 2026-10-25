@@ -2,12 +2,13 @@ import { mount } from '@vue/test-utils'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
 vi.mock('@inertiajs/vue3', async () => (await import('../../test/inertiaMock')).mock)
-import { resetInertiaMock } from '../../test/inertiaMock'
+import { resetInertiaMock, router } from '../../test/inertiaMock'
 import Index from './Index.vue'
 
 beforeEach(resetInertiaMock)
 
-const common = { auth: { user: { id: 1, name: 'A', email: 'a@x.io', is_admin: false } }, project: { id: 5, name: 'Shop', slug: 'shop' }, can_manage: false }
+const noFilter = { filters: { user: null }, users: [] }
+const common = { ...noFilter, auth: { user: { id: 1, name: 'A', email: 'a@x.io', is_admin: false } }, project: { id: 5, name: 'Shop', slug: 'shop' }, can_manage: false }
 
 describe('Replays/Index', () => {
   it('lists replays with user, duration and first page', () => {
@@ -41,5 +42,60 @@ describe('Replays/Index', () => {
   it('explains how replays get here when there are none', () => {
     const w = mount(Index, { props: { ...common, replays: [] } as never })
     expect(w.text()).toContain('Aucun replay')
+  })
+
+  describe('user filter', () => {
+    const base = { first_seen: '2023-11-14T10:00:00Z', last_seen: '2023-11-14T10:02:05Z', duration_seconds: 5, segment_count: 1, urls: [], user_label: 'jane@example.com',
+      browser: null, os: null, release_name: null, environment: null, error_ids: [], live: false }
+    const users = [{ label: 'jane@example.com', count: 3 }, { label: 'john@example.com', count: 1 }]
+    const withReplays = (over: Record<string, unknown> = {}) =>
+      mount(Index, { props: { ...common, replays: [{ ...base, replay_id: 'a'.repeat(32) }], users, ...over } as never })
+
+    it('puts a user filter at the top of the page, suggesting the known users', () => {
+      const w = withReplays()
+      const input = w.find('form.user-filter input[name="user"]')
+      expect(input.exists()).toBe(true)
+      const options = w.findAll('datalist option').map((o) => o.attributes('value'))
+      expect(options).toEqual(['jane@example.com', 'john@example.com'])
+      expect(w.find('datalist').text() + w.html()).toContain('3 sessions')
+    })
+
+    it('shows the active filter in the field', () => {
+      const w = withReplays({ filters: { user: 'jane' } })
+      expect((w.find('input[name="user"]').element as HTMLInputElement).value).toBe('jane')
+    })
+
+    it('applies the filter through a visit that keeps the page state', async () => {
+      const w = withReplays()
+      await w.find('input[name="user"]').setValue('  john ')
+      await w.find('form.user-filter').trigger('submit')
+      expect(router.get).toHaveBeenCalledWith('/projects/5/replays', { user: 'john' }, expect.objectContaining({ preserveState: true, replace: true }))
+    })
+
+    it('submitting an empty field clears the filter', async () => {
+      const w = withReplays({ filters: { user: 'jane' } })
+      await w.find('input[name="user"]').setValue('')
+      await w.find('form.user-filter').trigger('submit')
+      expect(router.get).toHaveBeenCalledWith('/projects/5/replays', {}, expect.anything())
+    })
+
+    it('resets the filter with its button, shown only while a filter is active', async () => {
+      expect(withReplays().find('button.reset-filter').exists()).toBe(false)
+      const w = withReplays({ filters: { user: 'jane' } })
+      await w.find('button.reset-filter').trigger('click')
+      expect(router.get).toHaveBeenCalledWith('/projects/5/replays', {}, expect.anything())
+    })
+
+    it('says no session matches instead of explaining how to enable replays', () => {
+      const w = mount(Index, { props: { ...common, replays: [], filters: { user: 'zoe' }, users } as never })
+      expect(w.text()).toContain('Aucun replay pour « zoe »')
+      expect(w.text()).not.toContain('replayIntegration')
+      expect(w.find('form.user-filter').exists()).toBe(true)
+    })
+
+    it('hides the filter when the project has no replay at all', () => {
+      const w = mount(Index, { props: { ...common, replays: [] } as never })
+      expect(w.find('form.user-filter').exists()).toBe(false)
+    })
   })
 })

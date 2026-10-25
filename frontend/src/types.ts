@@ -112,6 +112,12 @@ export interface Replay {
   live: boolean
 }
 
+/** Utilisateur ayant au moins une session, pour le filtre de la liste des replays. */
+export interface ReplayUser {
+  label: string
+  count: number
+}
+
 export interface LinkedError {
   event_id: string
   issue_id: number

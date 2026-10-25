@@ -140,3 +140,90 @@ async fn logs_can_be_filtered_by_level_and_text() {
     assert_eq!(r.props()["logs"].as_array().unwrap().len(), 3, "filtres vides ignorés");
     w.db.cleanup().await;
 }
+
+// --- Filtre par utilisateur ---
+
+async fn replay_row(w: &W, p: &error500::projects::Project, rid: &str, user: Option<&str>, minutes_ago: u32) {
+    sqlx::query(
+        "INSERT INTO replays (project_id, replay_id, first_seen, last_seen, user_label) \
+         VALUES (?, ?, UTC_TIMESTAMP(3) - INTERVAL ? MINUTE, UTC_TIMESTAMP(3) - INTERVAL ? MINUTE, ?)",
+    )
+    .bind(p.id)
+    .bind(rid)
+    .bind(minutes_ago + 1)
+    .bind(minutes_ago)
+    .bind(user)
+    .execute(&w.db.pool)
+    .await
+    .unwrap();
+}
+
+fn ids(r: &web_common::Resp) -> Vec<String> {
+    r.props()["replays"].as_array().unwrap().iter().map(|x| x["replay_id"].as_str().unwrap().to_string()).collect()
+}
+
+async fn filter_setup() -> (W, error500::projects::Project, String) {
+    let w = web_app().await;
+    let (p, cookie) = setup(&w).await;
+    replay_row(&w, &p, &hex_id(1), Some("jane@example.com"), 1).await;
+    replay_row(&w, &p, &hex_id(2), Some("john@example.com"), 2).await;
+    replay_row(&w, &p, &hex_id(3), Some("jane@example.com"), 3).await;
+    replay_row(&w, &p, &hex_id(4), None, 4).await;
+    (w, p, cookie)
+}
+
+#[tokio::test]
+async fn replays_can_be_filtered_by_user_with_a_case_insensitive_substring() {
+    let (w, p, cookie) = filter_setup().await;
+    let url = |q: &str| format!("/projects/{}/replays{q}", p.id);
+
+    let all = w.get(&url(""), Some(&cookie)).await;
+    assert_eq!(ids(&all), vec![hex_id(1), hex_id(2), hex_id(3), hex_id(4)]);
+    assert_eq!(all.props()["filters"]["user"], serde_json::Value::Null);
+
+    let jane = w.get(&url("?user=JANE"), Some(&cookie)).await;
+    assert_eq!(ids(&jane), vec![hex_id(1), hex_id(3)]);
+    assert_eq!(jane.props()["filters"]["user"], "JANE");
+
+    let domain = w.get(&url("?user=%40example.com"), Some(&cookie)).await;
+    assert_eq!(ids(&domain).len(), 3, "les sessions anonymes n'ont pas d'utilisateur à comparer");
+
+    assert!(ids(&w.get(&url("?user=nobody"), Some(&cookie)).await).is_empty());
+    w.db.cleanup().await;
+}
+
+#[tokio::test]
+async fn blank_filter_means_no_filter_and_wildcards_are_literal() {
+    let (w, p, cookie) = filter_setup().await;
+    let url = |q: &str| format!("/projects/{}/replays{q}", p.id);
+    let blank = w.get(&url("?user=%20%20"), Some(&cookie)).await;
+    assert_eq!(ids(&blank).len(), 4);
+    assert_eq!(blank.props()["filters"]["user"], serde_json::Value::Null);
+    // `%` et `_` ne sont pas des jokers : ils ne ressortent pas toutes les sessions
+    assert!(ids(&w.get(&url("?user=%25"), Some(&cookie)).await).is_empty());
+    assert!(ids(&w.get(&url("?user=ja_e"), Some(&cookie)).await).is_empty());
+    w.db.cleanup().await;
+}
+
+#[tokio::test]
+async fn known_users_are_offered_with_their_session_count_whatever_the_filter() {
+    let (w, p, cookie) = filter_setup().await;
+    let r = w.get(&format!("/projects/{}/replays?user=john", p.id), Some(&cookie)).await;
+    assert_eq!(
+        r.props()["users"],
+        json!([{"label": "jane@example.com", "count": 2}, {"label": "john@example.com", "count": 1}])
+    );
+    w.db.cleanup().await;
+}
+
+#[tokio::test]
+async fn user_filter_never_leaks_other_projects() {
+    let (w, p, cookie) = filter_setup().await;
+    let (bob, _) = w.login_as("bob@example.com").await;
+    let other = w.project_for(bob, "Autre").await;
+    replay_row(&w, &other, &hex_id(9), Some("jane@example.com"), 1).await;
+    let r = w.get(&format!("/projects/{}/replays?user=jane", p.id), Some(&cookie)).await;
+    assert_eq!(ids(&r), vec![hex_id(1), hex_id(3)]);
+    assert_eq!(r.props()["users"].as_array().unwrap().len(), 2);
+    w.db.cleanup().await;
+}

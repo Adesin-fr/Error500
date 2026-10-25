@@ -49,6 +49,7 @@ Backend (`src/`) :
 - Suppression d'un projet (`projects::delete`, Réglages, propriétaire ou admin, nom à retaper) : cascade SQL puis suppression des blobs `replays/`, `sourcemaps/`, `chunks/` du projet.
 - `sourcemaps` : stockage par projet, association par `debug_id` ou release + chemin (`~/static/app.js.map`), résolution des frames.
 - `stacktrace` : vue exceptions/frames (le plus récent d'abord). Le nom d'une fonction vient du token de **l'appelant** (le nom d'une map à une position est celui de la fonction appelée).
+- Filtre de la liste des replays par utilisateur (`?user=`, sous-chaîne insensible à la casse sur `replays.user_label`, `%`/`_` littéraux ; `queries::list_replays_for_user`, `replay_users` pour les suggestions). Une session anonyme ne correspond à aucun filtre.
 - Mode live des replays : une session est « en direct » tant qu'un segment a été reçu depuis moins de 60 s (`replay_segments.received_at`, `queries::LIVE_WINDOW_SECS`). `GET /projects/{id}/replays/{rid}/stream[?after=N]` (SSE, `web::replays::stream`) envoie `status` (`{live}`) puis `segment` (`{segment_id, events}`) pour chaque segment, y compris ceux qui arrivent pendant que le flux est ouvert ; la base est interrogée toutes les `live_poll` (1 s), sans état partagé entre instances. Le retard réel est celui du SDK Sentry, qui envoie ses segments par lots toutes les 5 à 15 s : ce n'est pas du temps réel image par image.
 - `queries` : lectures pour l'UI (issues, événements, logs, replays, erreurs liées).
 - `storage` : `BlobStore` (disque local, S3 ou mémoire) via `object_store`.
