@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { onBeforeUnmount, onMounted, ref, useTemplateRef } from 'vue'
+import { normalizeReplayEvents } from '../lib/replay'
 
 const props = defineProps<{ eventsUrl: string }>()
 
@@ -31,7 +32,7 @@ onMounted(async () => {
     const width = root.value?.clientWidth || 960
     player = new Player({
       target: container.value,
-      props: { events: events as never, width, height: Math.round(width * 0.6), autoPlay: false, skipInactive: true, speedOption: [1, 2, 4, 8] },
+      props: { events: normalizeReplayEvents(events) as never, width, height: Math.round(width * 0.6), autoPlay: false, skipInactive: true, speedOption: [1, 2, 4, 8] },
     })
     status.value = 'ready'
   } catch (e) {

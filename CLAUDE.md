@@ -60,7 +60,7 @@ Frontend (`frontend/`, Vue 3 + TypeScript + Vite, `<script setup>`) :
 
 - `src/pages/**` : une page par composant Inertia rendu par Rust (`Issues/Show`, `Replays/Show`…).
 - `src/components/**` : `StackTrace`, `StackFrame`, `Breadcrumbs`, `ReplayPlayer` (`@sentry-internal/rrweb-player`, chargé à la demande), `Pagination`…
-- `src/types.ts` : formes des props envoyées par Rust. `src/lib/format.ts` : formatage.
+- `src/types.ts` : formes des props envoyées par Rust. `src/lib/format.ts` : formatage. `src/lib/replay.ts` : les événements personnalisés du SDK Sentry (type 5) sont horodatés en secondes, rrweb attend des millisecondes ; ils sont convertis avant le lecteur (sinon la durée de la session affichée est absurde).
 - Tests : Vitest + Vue Test Utils (`npm test`), tests boîte noire ; `src/test/inertiaMock.ts` remplace `@inertiajs/vue3`.
 - Le build (`frontend/dist`) est embarqué dans le binaire (rust-embed) ; `build.rs` relance la compilation quand il change.
 

@@ -42,6 +42,18 @@ describe('ReplayPlayer', () => {
     expect(w.text()).not.toContain('Chargement')
   })
 
+  it('hands rrweb custom events with timestamps in milliseconds, so the duration is the real one', async () => {
+    vi.stubGlobal('fetch', respond([
+      { type: 4, timestamp: 1792943180413 },
+      { type: 5, timestamp: 1792943185.086, data: { tag: 'breadcrumb' } },
+      { type: 2, timestamp: 1792943190365 },
+    ]))
+    mount(ReplayPlayer, { props: { eventsUrl: '/x' } })
+    await flushPromises()
+    const ts = (players[0]!.options.props.events as Array<{ timestamp: number }>).map((e) => e.timestamp)
+    expect(ts).toEqual([1792943180413, 1792943185086, 1792943190365])
+  })
+
   it('sizes the player from the visible width of its card, not from the hidden host', async () => {
     // Comme dans un vrai navigateur : un élément masqué (display: none) mesure 0 px.
     const widthOf = vi.spyOn(HTMLElement.prototype, 'clientWidth', 'get').mockImplementation(function (this: HTMLElement) {
